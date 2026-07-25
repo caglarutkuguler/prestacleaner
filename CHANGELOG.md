@@ -2,6 +2,14 @@
 
 All notable changes to **Database Cleaner** (`prestacleaner`).
 
+## 3.3.0
+
+### Fixed
+- **The store health widget appeared on every back-office page, not just the Dashboard.** 3.2.0 hooked `displayDashboardTop`, assuming it was Dashboard-specific - it's actually rendered by the shared page-header toolbar included on every admin controller. Moved to `dashboardZoneOne`, the hook `AdminDashboardController` renders exclusively into its own left-hand column; the upgrade script unregisters the old hook and registers the new one automatically.
+
+### Changed
+- Redesigned the Dashboard widget to match the configure page: a circular badge showing the score, colored by the same excellent/good/attention/poor thresholds, instead of a flat colored strip. Its own `<style>` block is embedded directly in the hook output (a module's CSS never loads on the Dashboard controller, only on its own configure page), so it renders correctly with zero extra asset files.
+
 ## 3.2.0
 
 ### Added

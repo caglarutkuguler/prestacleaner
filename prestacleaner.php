@@ -50,7 +50,7 @@ class PrestaCleaner extends Module
     {
         $this->name = 'prestacleaner';
         $this->tab = 'administration';
-        $this->version = '3.2.0';
+        $this->version = '3.3.0';
         $this->author = 'MEG Venture';
         $this->need_instance = 0;
         $this->multishop_context = Shop::CONTEXT_ALL;
@@ -68,7 +68,7 @@ class PrestaCleaner extends Module
     {
         return parent::install()
             && $this->registerHook('actionAdminControllerSetMedia')
-            && $this->registerHook('displayDashboardTop')
+            && $this->registerHook('dashboardZoneOne')
             && Configuration::updateGlobalValue(self::CONF_CRON_TOKEN, Tools::passwdGen(32))
             && Configuration::updateGlobalValue(self::CONF_AUTO_ENABLED, 0)
             && Configuration::updateGlobalValue(self::CONF_AUTO_INTERVAL_DAYS, 30)
@@ -121,14 +121,17 @@ class PrestaCleaner extends Module
     }
 
     /**
-     * A compact store-health strip at the top of the PrestaShop Dashboard,
-     * clearly labelled with which module it comes from and linking straight
-     * to this module's configure page. Uses only core Bootstrap classes
-     * (alert/btn) - a module's own CSS never loads on the Dashboard
-     * controller, only on its own configure page, so anything rendered
-     * here that depended on custom classes would show up unstyled.
+     * A store-health card in the LEFT column of the PrestaShop Dashboard
+     * only - `dashboardZoneOne` (no "display" prefix) is the hook
+     * AdminDashboardController actually renders into its own left-hand
+     * column; `displayDashboardTop` (used by an earlier version of this
+     * widget) is rendered by the shared page-header toolbar included on
+     * EVERY back-office page, which is why it showed up outside the
+     * Dashboard too. Self-contained inline <style>: a module's own CSS
+     * never loads on the Dashboard controller, only on its own configure
+     * page, so the circle badge is redrawn here rather than assumed shared.
      */
-    public function hookDisplayDashboardTop($params)
+    public function hookDashboardZoneOne($params)
     {
         if (!$this->active) {
             return '';
@@ -146,29 +149,40 @@ class PrestaCleaner extends Module
         $label = isset($report['label']) ? (string) $report['label'] : '';
         $reasons = (isset($report['reasons']) && is_array($report['reasons'])) ? $report['reasons'] : [];
 
-        $alertClass = 'alert-success';
-        if ($score < 40) {
-            $alertClass = 'alert-danger';
-        } elseif ($score < 70) {
-            $alertClass = 'alert-warning';
-        } elseif ($score < 90) {
-            $alertClass = 'alert-info';
+        $badgeClass = 'prestacleaner-dash-poor';
+        if ($score >= 90) {
+            $badgeClass = 'prestacleaner-dash-excellent';
+        } elseif ($score >= 70) {
+            $badgeClass = 'prestacleaner-dash-good';
+        } elseif ($score >= 40) {
+            $badgeClass = 'prestacleaner-dash-attention';
         }
 
-        $reasonsText = implode(' &middot; ', array_map(function ($reason) {
-            return Tools::safeOutput(isset($reason['text']) ? $reason['text'] : '');
-        }, array_slice($reasons, 0, 2)));
+        $reasonsHtml = '';
+        foreach (array_slice($reasons, 0, 2) as $reason) {
+            $reasonsHtml .= '<li>'.Tools::safeOutput(isset($reason['text']) ? $reason['text'] : '').'</li>';
+        }
 
-        return '<div class="alert '.$alertClass.'" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
-            <div>
-                <strong>'.sprintf($this->trans('Store health: %d/100 (%s)', [], 'Modules.Prestacleaner.Admin'), $score, Tools::safeOutput($label)).'</strong>
-                <span style="margin-left:8px">'.$reasonsText.'</span>
-            </div>
-            <div>
-                <small>'.sprintf($this->trans('Data from the %s module.', [], 'Modules.Prestacleaner.Admin'), '<strong>'.Tools::safeOutput($this->displayName).'</strong>').'</small>
-                <a href="'.$this->getConfigureUrl().'" class="btn btn-default btn-xs" style="margin-left:8px">'.$this->trans('Open', [], 'Modules.Prestacleaner.Admin').'</a>
-            </div>
-        </div>';
+        return '<style>
+                .prestacleaner-dash-badge{width:80px;height:80px;border-radius:50%;margin:0 auto;
+                    display:flex;align-items:center;justify-content:center;color:#fff;font-size:26px;font-weight:700}
+                .prestacleaner-dash-excellent{background:#4CAF50}
+                .prestacleaner-dash-good{background:#8BC34A}
+                .prestacleaner-dash-attention{background:#FF9800}
+                .prestacleaner-dash-poor{background:#F44336}
+                .prestacleaner-dash-reasons{list-style:none;margin:8px 0;padding:0;font-size:12px;text-align:left}
+                .prestacleaner-dash-reasons li{padding:2px 0}
+            </style>
+            <div class="panel">
+                <div class="panel-heading"><i class="icon-dashboard"></i> '.$this->trans('Store health', [], 'Modules.Prestacleaner.Admin').'</div>
+                <div class="panel-body" style="text-align:center">
+                    <div class="prestacleaner-dash-badge '.$badgeClass.'">'.$score.'</div>
+                    <div style="margin-top:8px;font-weight:600">'.Tools::safeOutput($label).'</div>
+                    <ul class="prestacleaner-dash-reasons">'.$reasonsHtml.'</ul>
+                    <a href="'.$this->getConfigureUrl().'" class="btn btn-default btn-xs">'.$this->trans('Open', [], 'Modules.Prestacleaner.Admin').'</a>
+                    <div style="margin-top:8px;font-size:11px;color:#999">'.sprintf($this->trans('Data from the %s module.', [], 'Modules.Prestacleaner.Admin'), Tools::safeOutput($this->displayName)).'</div>
+                </div>
+            </div>';
     }
 
     /**
@@ -1480,7 +1494,7 @@ class PrestaCleaner extends Module
     {
         $steps = [
             $this->trans('The score below is computed live from your own database - it tells you if anything actually needs attention right now.', [], 'Modules.Prestacleaner.Admin'),
-            $this->trans('The same score also appears at the top of the PrestaShop Dashboard, clearly labelled as coming from this module, with a link straight back here.', [], 'Modules.Prestacleaner.Admin'),
+            $this->trans('The same score also appears in the left column of the PrestaShop Dashboard, clearly labelled as coming from this module, with a link straight back here.', [], 'Modules.Prestacleaner.Admin'),
             $this->trans('Every action has a "Preview" button: it reports exactly what would change without touching anything, so you can check before you commit.', [], 'Modules.Prestacleaner.Admin'),
             $this->trans('"Check & fix" and "Clean & optimize" are always safe to run and can be scheduled automatically below.', [], 'Modules.Prestacleaner.Admin'),
             $this->trans('Resetting the catalog or orders is permanent. Tick "back up first", then type the confirmation phrase exactly as shown to proceed.', [], 'Modules.Prestacleaner.Admin'),
