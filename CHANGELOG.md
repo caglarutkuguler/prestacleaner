@@ -2,6 +2,14 @@
 
 All notable changes to **Database Cleaner** (`prestacleaner`).
 
+## 3.2.0
+
+### Added
+- The store health score now also appears at the top of the PrestaShop Dashboard (`displayDashboardTop`), as a compact strip clearly labelled "Data from the Database Cleaner module" with a link straight to the configure page - so the score is visible without opening the module at all, and it's always clear which module produced it.
+
+### Changed
+- The health-score computation (~110 COUNT queries plus a couple of table scans) is now cached for up to an hour. The configure page still always computes it live and refreshes the cache as a side effect; the Dashboard widget reuses that cache so it never adds real load to a page most admins land on multiple times a day. Running any action, or a scheduled run, also refreshes it immediately.
+
 ## 3.1.0
 
 ### Added

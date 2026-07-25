@@ -6,7 +6,7 @@ Safely clean up a PrestaShop database: fix orphan rows left behind by deleted pr
 
 ## What it does
 
-- **Store health score** - a live, computed score (not a static claim) on the configure page, with the specific reasons behind it.
+- **Store health score** - a live, computed score (not a static claim) on the configure page, with the specific reasons behind it. The same score also appears as a compact strip at the top of the PrestaShop Dashboard, clearly labelled as coming from this module, with a link back to the configure page.
 - **Check & fix** - removes rows that point at something already deleted (a product, an order, a language, a shop...) across ~100 known table relationships, duplicate configuration entries, and orphan translations. Always safe to run.
 - **Clean & optimize** - removes abandoned carts (older than a month, never ordered), expired or exhausted cart rules, and re-numbers admin menu positions left with gaps or duplicates. Always safe to run.
 - **Reset the catalog / Reset orders & customers** - permanently wipes the corresponding tables and images. This is the only irreversible action, and it is never scheduled or reachable by cron.
@@ -68,6 +68,9 @@ Tick the "I understand the checked orders will be permanently deleted" box - it'
 **A payment record disappeared after deleting an order, but a sibling order using the same reference is fine.**
 That's expected: a payment is only removed once none of the orders sharing its reference (multi-package orders can share one) still exist; as long as one survives, the payment record is kept.
 
+**The Dashboard widget shows an old score / doesn't match the configure page.**
+The Dashboard strip is cached for up to an hour to avoid re-running the full health check on every Dashboard view; the configure page always computes it live (and refreshes that cache in the process). Running any action, or a scheduled run, also refreshes it immediately.
+
 **Automatic scheduled runs never seem to happen.**
 Without a real cron job, the fallback only triggers when an admin opens the back office, so a shop nobody logs into for weeks won't run on schedule either - use the cron URL instead for guaranteed automation.
 
@@ -75,6 +78,7 @@ Without a real cron job, the fallback only triggers when an admin opens the back
 
 - Complete rewrite: real automatic backups, a dry-run preview for every action, a computed store health score, scheduled maintenance (cron endpoint + back-office fallback), and a redesigned configure page.
 - Added **Delete selected orders**: search/filter and remove specific orders instead of only being able to reset every order in the store.
+- Added the store health score to the PrestaShop Dashboard itself, clearly attributed to this module.
 - Destructive actions (catalog/orders reset) now require typing an exact confirmation phrase, checked server-side, instead of a checkbox plus a client-side `confirm()` dialog that a direct form submission could bypass entirely.
 - Results are now reported in plain language (which table, why, how many rows) instead of raw SQL.
 - Removed the module's dependency on jQuery for its confirmation dialogs.

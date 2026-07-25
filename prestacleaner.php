@@ -34,6 +34,7 @@ class PrestaCleaner extends Module
     const CONF_BACKUP_BEFORE_TRUNCATE = 'PRESTACLEANER_BACKUP_BEFORE_TRUNCATE';
     const CONF_BACKUP_BEFORE_DELETE_ORDERS = 'PRESTACLEANER_BACKUP_BEFORE_DELETE_ORDERS';
     const CONF_BACKUP_RETENTION_DAYS = 'PRESTACLEANER_BACKUP_RETENTION_DAYS';
+    const CONF_HEALTH_CACHE = 'PRESTACLEANER_HEALTH_CACHE';
 
     /** Auto (scheduled) runs only ever perform these two, always-reversible-by-nature actions. Truncation can never be scheduled. */
     const AUTO_RUN_ACTIONS = ['fix', 'optimize'];
@@ -49,7 +50,7 @@ class PrestaCleaner extends Module
     {
         $this->name = 'prestacleaner';
         $this->tab = 'administration';
-        $this->version = '3.1.0';
+        $this->version = '3.2.0';
         $this->author = 'MEG Venture';
         $this->need_instance = 0;
         $this->multishop_context = Shop::CONTEXT_ALL;
@@ -67,6 +68,7 @@ class PrestaCleaner extends Module
     {
         return parent::install()
             && $this->registerHook('actionAdminControllerSetMedia')
+            && $this->registerHook('displayDashboardTop')
             && Configuration::updateGlobalValue(self::CONF_CRON_TOKEN, Tools::passwdGen(32))
             && Configuration::updateGlobalValue(self::CONF_AUTO_ENABLED, 0)
             && Configuration::updateGlobalValue(self::CONF_AUTO_INTERVAL_DAYS, 30)
@@ -84,7 +86,7 @@ class PrestaCleaner extends Module
             self::CONF_CRON_TOKEN, self::CONF_AUTO_ENABLED, self::CONF_AUTO_INTERVAL_DAYS,
             self::CONF_AUTO_LAST_RUN, self::CONF_AUTO_LAST_RESULT, self::CONF_BACKUP_BEFORE_FIX,
             self::CONF_BACKUP_BEFORE_OPTIMIZE, self::CONF_BACKUP_BEFORE_TRUNCATE,
-            self::CONF_BACKUP_BEFORE_DELETE_ORDERS, self::CONF_BACKUP_RETENTION_DAYS,
+            self::CONF_BACKUP_BEFORE_DELETE_ORDERS, self::CONF_BACKUP_RETENTION_DAYS, self::CONF_HEALTH_CACHE,
         ] as $key) {
             Configuration::deleteByName($key);
         }
@@ -119,6 +121,57 @@ class PrestaCleaner extends Module
     }
 
     /**
+     * A compact store-health strip at the top of the PrestaShop Dashboard,
+     * clearly labelled with which module it comes from and linking straight
+     * to this module's configure page. Uses only core Bootstrap classes
+     * (alert/btn) - a module's own CSS never loads on the Dashboard
+     * controller, only on its own configure page, so anything rendered
+     * here that depended on custom classes would show up unstyled.
+     */
+    public function hookDisplayDashboardTop($params)
+    {
+        if (!$this->active) {
+            return '';
+        }
+
+        try {
+            $report = self::computeHealthReportCached(3600);
+        } catch (Throwable $e) {
+            PrestaShopLogger::addLog('PrestaCleaner dashboard widget: '.$e->getMessage(), 2);
+
+            return '';
+        }
+
+        $score = isset($report['score']) ? (int) $report['score'] : 100;
+        $label = isset($report['label']) ? (string) $report['label'] : '';
+        $reasons = (isset($report['reasons']) && is_array($report['reasons'])) ? $report['reasons'] : [];
+
+        $alertClass = 'alert-success';
+        if ($score < 40) {
+            $alertClass = 'alert-danger';
+        } elseif ($score < 70) {
+            $alertClass = 'alert-warning';
+        } elseif ($score < 90) {
+            $alertClass = 'alert-info';
+        }
+
+        $reasonsText = implode(' &middot; ', array_map(function ($reason) {
+            return Tools::safeOutput(isset($reason['text']) ? $reason['text'] : '');
+        }, array_slice($reasons, 0, 2)));
+
+        return '<div class="alert '.$alertClass.'" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
+            <div>
+                <strong>'.sprintf($this->trans('Store health: %d/100 (%s)', [], 'Modules.Prestacleaner.Admin'), $score, Tools::safeOutput($label)).'</strong>
+                <span style="margin-left:8px">'.$reasonsText.'</span>
+            </div>
+            <div>
+                <small>'.sprintf($this->trans('Data from the %s module.', [], 'Modules.Prestacleaner.Admin'), '<strong>'.Tools::safeOutput($this->displayName).'</strong>').'</small>
+                <a href="'.$this->getConfigureUrl().'" class="btn btn-default btn-xs" style="margin-left:8px">'.$this->trans('Open', [], 'Modules.Prestacleaner.Admin').'</a>
+            </div>
+        </div>';
+    }
+
+    /**
      * Runs the safe (never-destructive) maintenance actions and records the
      * outcome, whether triggered by the BO-visit fallback or by the cron
      * front controller. Never runs a catalog/sales truncation.
@@ -138,6 +191,10 @@ class PrestaCleaner extends Module
             'optimize_queries' => count($result['optimize']),
             'ran_at' => $result['ran_at'],
         ]));
+
+        // So the Dashboard widget reflects the improvement immediately instead of
+        // waiting up to an hour for its own cache to expire.
+        self::computeHealthReportCached(0);
 
         return $result;
     }
@@ -1163,6 +1220,30 @@ class PrestaCleaner extends Module
         return ['score' => $score, 'label' => $label, 'reasons' => $reasons];
     }
 
+    /**
+     * The live report runs ~110 COUNT queries plus a couple of table scans -
+     * fine for an admin deliberately opening the configure page, too heavy
+     * to redo on every single Dashboard view. Cache it in Configuration and
+     * only recompute once it's older than $maxAgeSeconds (0 forces a fresh
+     * computation - and still refreshes the cache for the dashboard widget).
+     */
+    public static function computeHealthReportCached($maxAgeSeconds)
+    {
+        $cached = json_decode((string) Configuration::get(self::CONF_HEALTH_CACHE), true);
+
+        if ($maxAgeSeconds > 0 && is_array($cached) && isset($cached['computed_at'])
+            && (time() - (int) $cached['computed_at']) < $maxAgeSeconds
+        ) {
+            return $cached;
+        }
+
+        $report = self::computeHealthReport();
+        $report['computed_at'] = time();
+        Configuration::updateGlobalValue(self::CONF_HEALTH_CACHE, json_encode($report));
+
+        return $report;
+    }
+
     protected static function formatBytes($bytes)
     {
         $units = ['B', 'KB', 'MB', 'GB'];
@@ -1399,6 +1480,7 @@ class PrestaCleaner extends Module
     {
         $steps = [
             $this->trans('The score below is computed live from your own database - it tells you if anything actually needs attention right now.', [], 'Modules.Prestacleaner.Admin'),
+            $this->trans('The same score also appears at the top of the PrestaShop Dashboard, clearly labelled as coming from this module, with a link straight back here.', [], 'Modules.Prestacleaner.Admin'),
             $this->trans('Every action has a "Preview" button: it reports exactly what would change without touching anything, so you can check before you commit.', [], 'Modules.Prestacleaner.Admin'),
             $this->trans('"Check & fix" and "Clean & optimize" are always safe to run and can be scheduled automatically below.', [], 'Modules.Prestacleaner.Admin'),
             $this->trans('Resetting the catalog or orders is permanent. Tick "back up first", then type the confirmation phrase exactly as shown to proceed.', [], 'Modules.Prestacleaner.Admin'),
@@ -1418,7 +1500,7 @@ class PrestaCleaner extends Module
 
     protected function renderHealthPanel()
     {
-        $report = self::computeHealthReport();
+        $report = self::computeHealthReportCached(0);
         $badgeClass = 'prestacleaner-score-poor';
         if ($report['score'] >= 90) {
             $badgeClass = 'prestacleaner-score-excellent';
