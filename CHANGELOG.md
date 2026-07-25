@@ -2,6 +2,14 @@
 
 All notable changes to **Database Cleaner** (`prestacleaner`).
 
+## 3.1.0
+
+### Added
+- **Delete selected orders**: search orders by ID/reference, status or date range, tick the ones to remove, and delete only those. Cascades through every related table (order lines and their tax rows, history, carriers, applied vouchers, invoices and their tax rows and payments, returns, credit slips, order messages) in child-first order, safely drops a shared `order_payment` row only once no surviving order still references its `order_reference`, and clears the now-dangling employee "last order" shortcut. Reuses the same table relationships already known from the "Check & fix" engine rather than a second, separately-maintained list. Has the same optional backup-first and a dry-run preview as every other action; gated by a required, server-checked confirmation checkbox rather than the typed phrase used for the two full resets, since one page of search results is a naturally bounded, admin-picked blast radius.
+
+### Fixed
+- Order totals in the new "Delete selected orders" list are formatted through the current locale (falling back to `Tools::displayPrice()` only where it still exists), since that method was removed in PrestaShop 9.
+
 ## 3.0.0
 
 ### Added

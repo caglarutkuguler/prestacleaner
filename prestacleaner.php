@@ -32,6 +32,7 @@ class PrestaCleaner extends Module
     const CONF_BACKUP_BEFORE_FIX = 'PRESTACLEANER_BACKUP_BEFORE_FIX';
     const CONF_BACKUP_BEFORE_OPTIMIZE = 'PRESTACLEANER_BACKUP_BEFORE_OPTIMIZE';
     const CONF_BACKUP_BEFORE_TRUNCATE = 'PRESTACLEANER_BACKUP_BEFORE_TRUNCATE';
+    const CONF_BACKUP_BEFORE_DELETE_ORDERS = 'PRESTACLEANER_BACKUP_BEFORE_DELETE_ORDERS';
     const CONF_BACKUP_RETENTION_DAYS = 'PRESTACLEANER_BACKUP_RETENTION_DAYS';
 
     /** Auto (scheduled) runs only ever perform these two, always-reversible-by-nature actions. Truncation can never be scheduled. */
@@ -48,7 +49,7 @@ class PrestaCleaner extends Module
     {
         $this->name = 'prestacleaner';
         $this->tab = 'administration';
-        $this->version = '3.0.0';
+        $this->version = '3.1.0';
         $this->author = 'MEG Venture';
         $this->need_instance = 0;
         $this->multishop_context = Shop::CONTEXT_ALL;
@@ -73,6 +74,7 @@ class PrestaCleaner extends Module
             && Configuration::updateGlobalValue(self::CONF_BACKUP_BEFORE_FIX, 1)
             && Configuration::updateGlobalValue(self::CONF_BACKUP_BEFORE_OPTIMIZE, 1)
             && Configuration::updateGlobalValue(self::CONF_BACKUP_BEFORE_TRUNCATE, 1)
+            && Configuration::updateGlobalValue(self::CONF_BACKUP_BEFORE_DELETE_ORDERS, 1)
             && Configuration::updateGlobalValue(self::CONF_BACKUP_RETENTION_DAYS, 14);
     }
 
@@ -81,7 +83,8 @@ class PrestaCleaner extends Module
         foreach ([
             self::CONF_CRON_TOKEN, self::CONF_AUTO_ENABLED, self::CONF_AUTO_INTERVAL_DAYS,
             self::CONF_AUTO_LAST_RUN, self::CONF_AUTO_LAST_RESULT, self::CONF_BACKUP_BEFORE_FIX,
-            self::CONF_BACKUP_BEFORE_OPTIMIZE, self::CONF_BACKUP_BEFORE_TRUNCATE, self::CONF_BACKUP_RETENTION_DAYS,
+            self::CONF_BACKUP_BEFORE_OPTIMIZE, self::CONF_BACKUP_BEFORE_TRUNCATE,
+            self::CONF_BACKUP_BEFORE_DELETE_ORDERS, self::CONF_BACKUP_RETENTION_DAYS,
         ] as $key) {
             Configuration::deleteByName($key);
         }
@@ -895,6 +898,179 @@ class PrestaCleaner extends Module
 
     /*
      * ----------------------------------------------------------------
+     * Delete selected orders - a scoped alternative to resetting every
+     * order: the admin searches/picks specific orders (stray test
+     * transactions, for example) and only those are removed. Reuses the
+     * exact same order/child-table relationships already known from
+     * getCheckAndFixQueries(), cleaned up in child-first order, plus the
+     * two things that table alone can't express (order_payment links to
+     * orders by `order_reference`, not `id_order`; employee "last order"
+     * shortcut columns).
+     * ----------------------------------------------------------------
+     */
+
+    public static function sanitizeOrderIds($raw)
+    {
+        $ids = array_map('intval', (array) $raw);
+        $ids = array_filter($ids, function ($id) {
+            return $id > 0;
+        });
+
+        return array_values(array_unique($ids));
+    }
+
+    /**
+     * @return array{rows:array,total:int,page:int,pages:int}
+     */
+    public static function queryFilteredOrders(array $filters, $page, $perPage = 20)
+    {
+        $where = ['1 = 1'];
+
+        if ($filters['search'] !== '') {
+            if (Validate::isUnsignedId($filters['search'])) {
+                $where[] = 'o.id_order = '.(int) $filters['search'];
+            } else {
+                $where[] = 'o.reference LIKE "%'.pSQL($filters['search']).'%"';
+            }
+        }
+        if ((int) $filters['status'] > 0) {
+            $where[] = 'o.current_state = '.(int) $filters['status'];
+        }
+        if ($filters['date_from'] !== '' && Validate::isDate($filters['date_from'])) {
+            $where[] = 'o.date_add >= "'.pSQL($filters['date_from']).' 00:00:00"';
+        }
+        if ($filters['date_to'] !== '' && Validate::isDate($filters['date_to'])) {
+            $where[] = 'o.date_add <= "'.pSQL($filters['date_to']).' 23:59:59"';
+        }
+        $whereSql = implode(' AND ', $where);
+
+        $total = (int) Db::getInstance()->getValue('SELECT COUNT(*) FROM `'.bqSQL(self::t('orders')).'` o WHERE '.$whereSql);
+
+        $perPage = max(1, (int) $perPage);
+        $pages = max(1, (int) ceil($total / $perPage));
+        $page = max(1, min((int) $page, $pages));
+        $offset = ($page - 1) * $perPage;
+        $idLang = (int) Context::getContext()->language->id;
+
+        $rows = Db::getInstance()->executeS(
+            'SELECT o.id_order, o.reference, o.date_add, o.total_paid, o.id_currency, o.current_state,
+                    osl.name AS status, CONCAT(c.firstname, " ", c.lastname) AS customer_name, c.email
+             FROM `'.bqSQL(self::t('orders')).'` o
+             LEFT JOIN `'.bqSQL(self::t('customer')).'` c ON c.id_customer = o.id_customer
+             LEFT JOIN `'.bqSQL(self::t('order_state_lang')).'` osl ON osl.id_order_state = o.current_state AND osl.id_lang = '.$idLang.'
+             WHERE '.$whereSql.'
+             ORDER BY o.id_order DESC
+             LIMIT '.$perPage.' OFFSET '.$offset
+        );
+
+        return ['rows' => $rows ?: [], 'total' => $total, 'page' => $page, 'pages' => $pages];
+    }
+
+    public static function previewDeleteOrders(array $orderIds)
+    {
+        $orderIds = self::sanitizeOrderIds($orderIds);
+        if (!$orderIds) {
+            return [];
+        }
+
+        return self::processDeleteOrders('preview', implode(',', $orderIds), null);
+    }
+
+    public static function runDeleteOrders(array $orderIds, $backup = true)
+    {
+        $orderIds = self::sanitizeOrderIds($orderIds);
+        if (!$orderIds) {
+            return ['logs' => [], 'backup_file' => false, 'deleted' => 0];
+        }
+        $idList = implode(',', $orderIds);
+
+        $references = array_column(
+            Db::getInstance()->executeS('SELECT DISTINCT reference FROM `'.bqSQL(self::t('orders')).'` WHERE id_order IN ('.$idList.')'),
+            'reference'
+        );
+
+        $handle = null;
+        $backupFile = false;
+        if ($backup) {
+            [$backupFile, $handle] = self::openBackup('delete-orders');
+            if ($handle && $references) {
+                self::writeTableRowsToBackup($handle, 'order_payment', self::orderPaymentWhere($references));
+            }
+        }
+
+        $logs = self::processDeleteOrders('apply', $idList, $handle);
+
+        if ($handle) {
+            gzclose($handle);
+        }
+
+        // Only once the orders themselves are gone can we tell whether a shared
+        // payment reference (multi-package orders) still belongs to a survivor.
+        if ($references) {
+            Db::getInstance()->execute(
+                'DELETE FROM `'.bqSQL(self::t('order_payment')).'` WHERE '.self::orderPaymentWhere($references).'
+                    AND order_reference NOT IN (SELECT reference FROM `'.bqSQL(self::t('orders')).'`)'
+            );
+        }
+        Db::getInstance()->execute('UPDATE `'.bqSQL(self::t('employee')).'` SET id_last_order = 0 WHERE id_last_order IN ('.$idList.')');
+
+        return ['logs' => $logs, 'backup_file' => $backupFile, 'deleted' => count($orderIds)];
+    }
+
+    protected static function orderPaymentWhere(array $references)
+    {
+        if (!$references) {
+            return '1 = 0';
+        }
+        $quoted = array_map(function ($ref) {
+            return "'".pSQL($ref)."'";
+        }, $references);
+
+        return 'order_reference IN ('.implode(',', $quoted).')';
+    }
+
+    protected static function processDeleteOrders($mode, $idList, $handle)
+    {
+        $logs = [];
+        $orderDetail = bqSQL(self::t('order_detail'));
+        $orderInvoice = bqSQL(self::t('order_invoice'));
+        $orderReturn = bqSQL(self::t('order_return'));
+        $orderSlip = bqSQL(self::t('order_slip'));
+
+        self::applyOrCount($mode, $logs, $handle, 'order_detail_tax',
+            'id_order_detail IN (SELECT id_order_detail FROM `'.$orderDetail.'` WHERE id_order IN ('.$idList.'))',
+            'order line tax row(s)');
+        self::applyOrCount($mode, $logs, $handle, 'order_invoice_tax',
+            'id_order_invoice IN (SELECT id_order_invoice FROM `'.$orderInvoice.'` WHERE id_order IN ('.$idList.'))',
+            'invoice tax row(s)');
+        self::applyOrCount($mode, $logs, $handle, 'order_return_detail',
+            'id_order_return IN (SELECT id_order_return FROM `'.$orderReturn.'` WHERE id_order IN ('.$idList.'))',
+            'merchandise return line(s)');
+        self::applyOrCount($mode, $logs, $handle, 'order_slip_detail',
+            'id_order_slip IN (SELECT id_order_slip FROM `'.$orderSlip.'` WHERE id_order IN ('.$idList.'))',
+            'credit slip line(s)');
+
+        foreach ([
+            'order_detail' => 'order line(s)',
+            'order_history' => 'status history entrie(s)',
+            'order_carrier' => 'carrier/shipping row(s)',
+            'order_cart_rule' => 'applied voucher(s)',
+            'order_invoice' => 'invoice(s)',
+            'order_invoice_payment' => 'invoice payment row(s)',
+            'order_return' => 'merchandise return(s)',
+            'order_slip' => 'credit slip(s)',
+            'message' => 'order message(s)',
+        ] as $table => $description) {
+            self::applyOrCount($mode, $logs, $handle, $table, 'id_order IN ('.$idList.')', $description);
+        }
+
+        self::applyOrCount($mode, $logs, $handle, 'orders', 'id_order IN ('.$idList.')', 'order(s) permanently removed');
+
+        return $logs;
+    }
+
+    /*
+     * ----------------------------------------------------------------
      * Health score: a real, computed snapshot (never a static claim) shown
      * at the top of the configure page so the merchant sees at a glance
      * whether anything actually needs attention.
@@ -1031,6 +1207,10 @@ class PrestaCleaner extends Module
             $banner = $this->processApplyTruncate('catalog');
         } elseif (Tools::isSubmit('submitApplyTruncateSales')) {
             $banner = $this->processApplyTruncate('sales');
+        } elseif (Tools::isSubmit('submitPreviewDeleteOrders')) {
+            $banner = $this->renderPreviewDeleteOrders();
+        } elseif (Tools::isSubmit('submitApplyDeleteOrders')) {
+            $banner = $this->processApplyDeleteOrders();
         }
 
         return $this->renderStyle().'<div class="prestacleaner-wrap">'.$banner.$this->renderTutorialPanel().$this->renderHealthPanel()
@@ -1052,9 +1232,10 @@ class PrestaCleaner extends Module
             )
             .$this->renderTruncatePanel(
                 'truncate_sales', $this->trans('Reset orders & customers', [], 'Modules.Prestacleaner.Admin'),
-                $this->trans('Permanently deletes every customer, cart, order, connection log and customer message. There is no undo beyond the backup created below.', [], 'Modules.Prestacleaner.Admin'),
+                $this->trans('Permanently deletes every customer, cart, order, connection log and customer message. There is no undo beyond the backup created below. To remove only a few specific orders, use "Delete selected orders" below instead.', [], 'Modules.Prestacleaner.Admin'),
                 'submitPreviewTruncateSales', 'submitApplyTruncateSales', 'confirm_phrase_sales', self::CONFIRM_PHRASE_SALES
             )
+            .$this->renderDeleteOrdersPanel()
             .'</div>';
     }
 
@@ -1086,6 +1267,7 @@ class PrestaCleaner extends Module
         Configuration::updateGlobalValue(self::CONF_BACKUP_BEFORE_FIX, (int) Tools::getValue('default_backup_fix', 0) ? 1 : 0);
         Configuration::updateGlobalValue(self::CONF_BACKUP_BEFORE_OPTIMIZE, (int) Tools::getValue('default_backup_optimize', 0) ? 1 : 0);
         Configuration::updateGlobalValue(self::CONF_BACKUP_BEFORE_TRUNCATE, (int) Tools::getValue('default_backup_truncate', 0) ? 1 : 0);
+        Configuration::updateGlobalValue(self::CONF_BACKUP_BEFORE_DELETE_ORDERS, (int) Tools::getValue('default_backup_delete_orders', 0) ? 1 : 0);
 
         $purged = self::purgeOldBackups((int) $retentionRaw);
 
@@ -1220,6 +1402,7 @@ class PrestaCleaner extends Module
             $this->trans('Every action has a "Preview" button: it reports exactly what would change without touching anything, so you can check before you commit.', [], 'Modules.Prestacleaner.Admin'),
             $this->trans('"Check & fix" and "Clean & optimize" are always safe to run and can be scheduled automatically below.', [], 'Modules.Prestacleaner.Admin'),
             $this->trans('Resetting the catalog or orders is permanent. Tick "back up first", then type the confirmation phrase exactly as shown to proceed.', [], 'Modules.Prestacleaner.Admin'),
+            $this->trans('Need to remove just a handful of orders instead of everything? Search for them in "Delete selected orders" and pick only the ones you want.', [], 'Modules.Prestacleaner.Admin'),
             $this->trans('Backups made here appear under Advanced Parameters > DB Backup, where they can be downloaded or restored using the standard PrestaShop tool.', [], 'Modules.Prestacleaner.Admin'),
         ];
 
@@ -1278,11 +1461,13 @@ class PrestaCleaner extends Module
             'default_backup_fix' => self::CONF_BACKUP_BEFORE_FIX,
             'default_backup_optimize' => self::CONF_BACKUP_BEFORE_OPTIMIZE,
             'default_backup_truncate' => self::CONF_BACKUP_BEFORE_TRUNCATE,
+            'default_backup_delete_orders' => self::CONF_BACKUP_BEFORE_DELETE_ORDERS,
         ];
         $backupLabels = [
             'default_backup_fix' => $this->trans('Back up by default before "Check & fix"', [], 'Modules.Prestacleaner.Admin'),
             'default_backup_optimize' => $this->trans('Back up by default before "Clean & optimize"', [], 'Modules.Prestacleaner.Admin'),
             'default_backup_truncate' => $this->trans('Back up by default before resetting the catalog or orders', [], 'Modules.Prestacleaner.Admin'),
+            'default_backup_delete_orders' => $this->trans('Back up by default before deleting selected orders', [], 'Modules.Prestacleaner.Admin'),
         ];
         $backupHtml = '';
         foreach ($backupChecks as $field => $confKey) {
@@ -1421,5 +1606,186 @@ class PrestaCleaner extends Module
                 '.$this->renderPreviewTable($key).'
             </div>
         </div>';
+    }
+
+    /**
+     * Tools::displayPrice() was removed in PrestaShop 9 (deprecated since
+     * 1.7.6), so it can fatal there with "Call to undefined method" -
+     * prefer the locale formatter and fall back only where it's absent.
+     */
+    protected function formatOrderPrice($amount, $idCurrency)
+    {
+        $isoCode = $this->context->currency->iso_code;
+        if ($idCurrency) {
+            try {
+                $currency = new Currency((int) $idCurrency);
+                if (Validate::isLoadedObject($currency)) {
+                    $isoCode = $currency->iso_code;
+                }
+            } catch (Throwable $e) {
+                // Keep the context currency's ISO code.
+            }
+        }
+
+        if (method_exists($this->context, 'getCurrentLocale')) {
+            return $this->context->getCurrentLocale()->formatPrice((float) $amount, $isoCode);
+        }
+        if (method_exists('Tools', 'displayPrice')) {
+            return Tools::displayPrice($amount);
+        }
+
+        return Tools::safeOutput(number_format((float) $amount, 2).' '.$isoCode);
+    }
+
+    protected function renderDeleteOrdersPanel()
+    {
+        $filters = [
+            'search' => trim((string) Tools::getValue('order_search', '')),
+            'status' => (int) Tools::getValue('order_status', 0),
+            'date_from' => (string) Tools::getValue('order_date_from', ''),
+            'date_to' => (string) Tools::getValue('order_date_to', ''),
+        ];
+        $page = max(1, (int) Tools::getValue('order_page', 1));
+        $action = $this->getConfigureUrl();
+
+        $html = '<div class="panel panel-danger">
+            <div class="panel-heading"><i class="icon-trash"></i> '.$this->trans('Delete selected orders', [], 'Modules.Prestacleaner.Admin').'</div>
+            <div class="panel-body">
+                <p>'.$this->trans('Search for specific orders - stray test transactions, for example - and permanently delete only the ones you pick. Everything else is left untouched.', [], 'Modules.Prestacleaner.Admin').'</p>
+                <form method="get" action="'.$action.'" class="form-inline" style="margin-bottom:15px">
+                    <input type="hidden" name="configure" value="'.Tools::safeOutput($this->name).'">
+                    <input type="hidden" name="tab_module" value="'.Tools::safeOutput($this->tab).'">
+                    <input type="hidden" name="module_name" value="'.Tools::safeOutput($this->name).'">
+                    <input type="text" class="form-control" name="order_search" value="'.Tools::safeOutput($filters['search']).'" placeholder="'.$this->trans('Order ID or reference', [], 'Modules.Prestacleaner.Admin').'">
+                    <select class="form-control" name="order_status">
+                        <option value="0">'.$this->trans('Any status', [], 'Modules.Prestacleaner.Admin').'</option>';
+
+        foreach (OrderState::getOrderStates((int) $this->context->language->id) as $state) {
+            $selected = ((int) $state['id_order_state'] === $filters['status']) ? ' selected="selected"' : '';
+            $html .= '<option value="'.(int) $state['id_order_state'].'"'.$selected.'>'.Tools::safeOutput($state['name']).'</option>';
+        }
+
+        $html .= '</select>
+                    <input type="date" class="form-control" name="order_date_from" value="'.Tools::safeOutput($filters['date_from']).'">
+                    <input type="date" class="form-control" name="order_date_to" value="'.Tools::safeOutput($filters['date_to']).'">
+                    <button type="submit" class="btn btn-default">'.$this->trans('Search', [], 'Modules.Prestacleaner.Admin').'</button>
+                </form>';
+
+        $result = self::queryFilteredOrders($filters, $page);
+
+        if (!$result['rows']) {
+            return $html.$this->alert('info', $this->trans('No orders match this search.', [], 'Modules.Prestacleaner.Admin')).'</div></div>';
+        }
+
+        $backupChecked = Configuration::get(self::CONF_BACKUP_BEFORE_DELETE_ORDERS) ? ' checked="checked"' : '';
+
+        $html .= '<form method="post" action="'.$action.'">
+            <input type="hidden" name="order_search" value="'.Tools::safeOutput($filters['search']).'">
+            <input type="hidden" name="order_status" value="'.(int) $filters['status'].'">
+            <input type="hidden" name="order_date_from" value="'.Tools::safeOutput($filters['date_from']).'">
+            <input type="hidden" name="order_date_to" value="'.Tools::safeOutput($filters['date_to']).'">
+            <input type="hidden" name="order_page" value="'.(int) $result['page'].'">
+            <table class="table prestacleaner-table">
+                <thead><tr>
+                    <th><input type="checkbox" onclick="var b=this.form.querySelectorAll(\'.pc-order-cb\');for(var i=0;i<b.length;i++){b[i].checked=this.checked;}"></th>
+                    <th>'.$this->trans('ID', [], 'Modules.Prestacleaner.Admin').'</th>
+                    <th>'.$this->trans('Reference', [], 'Modules.Prestacleaner.Admin').'</th>
+                    <th>'.$this->trans('Date', [], 'Modules.Prestacleaner.Admin').'</th>
+                    <th>'.$this->trans('Customer', [], 'Modules.Prestacleaner.Admin').'</th>
+                    <th>'.$this->trans('Status', [], 'Modules.Prestacleaner.Admin').'</th>
+                    <th>'.$this->trans('Total', [], 'Modules.Prestacleaner.Admin').'</th>
+                </tr></thead>
+                <tbody>';
+
+        foreach ($result['rows'] as $row) {
+            $html .= '<tr>
+                <td><input type="checkbox" class="pc-order-cb" name="order_ids[]" value="'.(int) $row['id_order'].'"></td>
+                <td>#'.(int) $row['id_order'].'</td>
+                <td>'.Tools::safeOutput($row['reference']).'</td>
+                <td>'.Tools::safeOutput($row['date_add']).'</td>
+                <td>'.Tools::safeOutput(trim((string) $row['customer_name'])).'<br><small>'.Tools::safeOutput((string) $row['email']).'</small></td>
+                <td>'.Tools::safeOutput((string) $row['status']).'</td>
+                <td>'.$this->formatOrderPrice($row['total_paid'], $row['id_currency']).'</td>
+            </tr>';
+        }
+
+        $html .= '</tbody></table>'.$this->renderOrderPagination($result, $filters);
+
+        $html .= '<div class="checkbox"><label><input type="checkbox" name="backup_delete_orders" value="1"'.$backupChecked.'> '.$this->trans('Back up the selected orders first', [], 'Modules.Prestacleaner.Admin').'</label></div>
+            <div class="checkbox"><label><input type="checkbox" name="confirm_delete_orders" value="1"> '.$this->trans('I understand the checked orders will be permanently deleted', [], 'Modules.Prestacleaner.Admin').'</label></div>
+            <button type="submit" name="submitPreviewDeleteOrders" value="1" class="btn btn-default">'.$this->trans('Preview selected (no changes)', [], 'Modules.Prestacleaner.Admin').'</button>
+            <button type="submit" name="submitApplyDeleteOrders" value="1" class="btn btn-danger" onclick="return confirm(\''.addslashes($this->trans('Delete the checked orders permanently?', [], 'Modules.Prestacleaner.Admin')).'\');">'.$this->trans('Delete selected', [], 'Modules.Prestacleaner.Admin').'</button>
+        </form>';
+
+        $html .= $this->renderPreviewTable('delete_orders');
+
+        return $html.'</div></div>';
+    }
+
+    protected function renderOrderPagination(array $result, array $filters)
+    {
+        if ($result['pages'] <= 1) {
+            return '';
+        }
+
+        $base = $this->getConfigureUrl()
+            .'&order_search='.urlencode($filters['search'])
+            .'&order_status='.(int) $filters['status']
+            .'&order_date_from='.urlencode($filters['date_from'])
+            .'&order_date_to='.urlencode($filters['date_to']);
+
+        $html = '<p>';
+        if ($result['page'] > 1) {
+            $html .= '<a class="btn btn-default btn-xs" href="'.$base.'&order_page='.($result['page'] - 1).'">'.$this->trans('Previous', [], 'Modules.Prestacleaner.Admin').'</a> ';
+        }
+        $html .= sprintf($this->trans('Page %d of %d', [], 'Modules.Prestacleaner.Admin'), $result['page'], $result['pages']);
+        if ($result['page'] < $result['pages']) {
+            $html .= ' <a class="btn btn-default btn-xs" href="'.$base.'&order_page='.($result['page'] + 1).'">'.$this->trans('Next', [], 'Modules.Prestacleaner.Admin').'</a>';
+        }
+
+        return $html.'</p>';
+    }
+
+    protected function renderPreviewDeleteOrders()
+    {
+        $orderIds = (array) Tools::getValue('order_ids', []);
+        $sanitized = self::sanitizeOrderIds($orderIds);
+
+        if (!$sanitized) {
+            return $this->alert('danger', $this->trans('Select at least one order first.', [], 'Modules.Prestacleaner.Admin'));
+        }
+
+        $rows = self::previewDeleteOrders($orderIds);
+        $this->previewResults['delete_orders'] = $rows;
+        $total = array_sum(array_column($rows, 'count'));
+
+        return $this->alert('info', sprintf(
+            $this->trans('Preview complete: deleting %d order(s) would remove %d row(s) across %d table(s). Nothing has been changed yet.', [], 'Modules.Prestacleaner.Admin'),
+            count($sanitized), $total, count($rows)
+        ));
+    }
+
+    protected function processApplyDeleteOrders()
+    {
+        $orderIds = self::sanitizeOrderIds(Tools::getValue('order_ids', []));
+
+        if (!$orderIds) {
+            return $this->alert('danger', $this->trans('Select at least one order first. Nothing was deleted.', [], 'Modules.Prestacleaner.Admin'));
+        }
+        if (!Tools::getValue('confirm_delete_orders')) {
+            return $this->alert('danger', $this->trans('Tick "I understand..." to confirm. Nothing was deleted.', [], 'Modules.Prestacleaner.Admin'));
+        }
+
+        $backup = (bool) Tools::getValue('backup_delete_orders', 0);
+        $result = self::runDeleteOrders($orderIds, $backup);
+
+        $message = sprintf($this->trans('%d order(s) permanently deleted.', [], 'Modules.Prestacleaner.Admin'), $result['deleted']);
+        if ($result['backup_file']) {
+            $message .= ' '.sprintf($this->trans('A backup was saved as %s (Advanced Parameters > DB Backup).', [], 'Modules.Prestacleaner.Admin'), '<code>'.Tools::safeOutput($result['backup_file']).'</code>');
+        } elseif ($backup) {
+            $message .= ' '.$this->trans('The backup could not be created - please check disk space and permissions.', [], 'Modules.Prestacleaner.Admin');
+        }
+
+        return $this->alert('warning', $message);
     }
 }
