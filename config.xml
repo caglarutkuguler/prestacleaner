@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<module>
+	<name>prestacleaner</name>
+	<displayName><![CDATA[Database Cleaner - Safe Cleanup, Backup & Scheduler]]></displayName>
+	<version><![CDATA[3.0.0]]></version>
+	<description><![CDATA[Safely remove orphan database rows, reset your catalog or orders, and keep your store lean - with automatic backups, a dry-run preview, scheduled maintenance and a one-glance health score.]]></description>
+	<author><![CDATA[MEG Venture]]></author>
+	<tab><![CDATA[administration]]></tab>
+	<is_configurable>1</is_configurable>
+	<need_instance>0</need_instance>
+	<limited_countries></limited_countries>
+</module>
