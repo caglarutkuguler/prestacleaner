@@ -2,6 +2,12 @@
 
 All notable changes to **Database Cleaner** (`prestacleaner`).
 
+## 3.3.1
+
+### Fixed
+- **Fatal error on the configure page and in "Check & fix": `Table 'ps_referrer_cache' doesn't exist`.** Two of the ~110 known table relationships (`referrer`/`referrer_cache`) date back to PrestaShop 1.6/1.7 - core dropped both tables entirely somewhere between 1.7.2 and 8.2, so any PS8/9 shop hit a fatal the moment the health score (or "Check & fix") tried to query them. The whole relationship list is now checked against a live `SHOW TABLES` snapshot first (one query, cached for the request), so any table a given PrestaShop version doesn't have is skipped instead of crashing - covering this pair specifically and any other version-specific gap that turns up later.
+- The health-score computation is now wrapped so it can never take the configure page down with it: on failure it logs the real error and falls back to the last successfully computed score, or a plain "temporarily unavailable" notice if there isn't one yet - either way, every action panel below it keeps working.
+
 ## 3.3.0
 
 ### Fixed

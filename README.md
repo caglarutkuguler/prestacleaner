@@ -59,6 +59,9 @@ The confirmation phrase must match exactly (it's not case-sensitive, but every w
 **A backup wasn't created even though "back up first" was ticked.**
 Check that the PrestaShop admin folder's `backups` directory is writable by the web server. The result message after running an action states plainly whether the backup succeeded.
 
+**The health score panel shows "The health check could not run this time."**
+Something in the check genuinely failed (check Advanced Parameters > Logs for the real error) - as of 3.3.1 this can no longer take down the rest of the configure page; every other panel and action still works normally while you look into it.
+
 **The health score won't reach 100.**
 A few reasons are informational rather than problems (for example, "scheduled maintenance is off") and only disappear once you actually enable that setting; the rest point at a specific panel to run.
 

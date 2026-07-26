@@ -50,7 +50,7 @@ class PrestaCleaner extends Module
     {
         $this->name = 'prestacleaner';
         $this->tab = 'administration';
-        $this->version = '3.3.0';
+        $this->version = '3.3.1';
         $this->author = 'MEG Venture';
         $this->need_instance = 0;
         $this->multishop_context = Shop::CONTEXT_ALL;
@@ -145,7 +145,13 @@ class PrestaCleaner extends Module
             return '';
         }
 
-        $score = isset($report['score']) ? (int) $report['score'] : 100;
+        // computeHealthReportCached() already logs and never throws for a failed
+        // computation; a null score here means "nothing to show", not "score 0".
+        if (!empty($report['error']) || !isset($report['score'])) {
+            return '';
+        }
+
+        $score = (int) $report['score'];
         $label = isset($report['label']) ? (string) $report['label'] : '';
         $reasons = (isset($report['reasons']) && is_array($report['reasons'])) ? $report['reasons'] : [];
 
@@ -441,6 +447,28 @@ class PrestaCleaner extends Module
         return self::processCheckAndFix('preview', null);
     }
 
+    /**
+     * One query for the whole run instead of one per table: the set of
+     * `_DB_PREFIX_`-prefixed tables that actually exist right now, keyed by
+     * physical (prefixed) name for an O(1) isset() check.
+     */
+    protected static function getExistingTables()
+    {
+        static $tables = null;
+
+        if ($tables === null) {
+            $tables = [];
+            $rows = Db::getInstance()->executeS(
+                'SHOW TABLES LIKE "'.preg_replace('/([%_])/', '\\$1', _DB_PREFIX_).'%"'
+            );
+            foreach ($rows as $row) {
+                $tables[current($row)] = true;
+            }
+        }
+
+        return $tables;
+    }
+
     protected static function processCheckAndFix($mode, $handle)
     {
         $db = Db::getInstance();
@@ -473,9 +501,17 @@ class PrestaCleaner extends Module
         );
 
         // ~110 known parent/child relationships across core (and a few module) tables.
+        // A handful of these table names date back to PrestaShop 1.6/1.7 and no
+        // longer exist on newer core (e.g. `referrer`/`referrer_cache`, dropped
+        // between 1.7.2 and 8.2) - checked against the real schema rather than
+        // assumed, so a table core has since removed is skipped, not fatal.
+        $existingTables = self::getExistingTables();
         foreach (self::sortByDependency(self::getCheckAndFixQueries()) as $rule) {
             [$table, $column, $refTable, $refColumn] = $rule;
             if (isset($rule[4]) && !Module::isInstalled($rule[4])) {
+                continue;
+            }
+            if (!isset($existingTables[self::t($table)]) || !isset($existingTables[self::t($refTable)])) {
                 continue;
             }
             self::applyOrCount(
@@ -1251,7 +1287,18 @@ class PrestaCleaner extends Module
             return $cached;
         }
 
-        $report = self::computeHealthReport();
+        try {
+            $report = self::computeHealthReport();
+        } catch (Throwable $e) {
+            PrestaShopLogger::addLog('PrestaCleaner health check: '.$e->getMessage(), 3);
+
+            // A last-known-good number beats no number; only report "unavailable"
+            // if there has never been a successful computation to fall back on.
+            return (is_array($cached) && isset($cached['score'])) ? $cached : [
+                'score' => null, 'label' => '', 'reasons' => [], 'error' => true, 'computed_at' => time(),
+            ];
+        }
+
         $report['computed_at'] = time();
         Configuration::updateGlobalValue(self::CONF_HEALTH_CACHE, json_encode($report));
 
@@ -1515,6 +1562,14 @@ class PrestaCleaner extends Module
     protected function renderHealthPanel()
     {
         $report = self::computeHealthReportCached(0);
+
+        if (!empty($report['error'])) {
+            return '<div class="panel">
+                <div class="panel-heading"><i class="icon-dashboard"></i> '.$this->trans('Store health', [], 'Modules.Prestacleaner.Admin').'</div>
+                <div class="panel-body">'.$this->alert('warning', $this->trans('The health check could not run this time - see Advanced Parameters > Logs for details. Every action below still works normally.', [], 'Modules.Prestacleaner.Admin')).'</div>
+            </div>';
+        }
+
         $badgeClass = 'prestacleaner-score-poor';
         if ($report['score'] >= 90) {
             $badgeClass = 'prestacleaner-score-excellent';
