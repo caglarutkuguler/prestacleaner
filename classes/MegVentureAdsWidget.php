@@ -47,19 +47,57 @@ class MegVentureAdsWidget
         }
 
         try {
-            $items = self::fetchItems($widgetUrl);
+            $data = self::fetchData($widgetUrl);
         } catch (\Throwable $e) {
             return '';
         }
+        $items = $data['items'];
         if (empty($items)) {
             return '';
         }
+        $shopName = $data['shop_name'];
+        $shopLogoUrl = $data['shop_logo_url'];
+        $shopUrl = $data['shop_url'];
 
-        $html = '<div style="margin:16px 0;padding:16px 18px;background:#f5f6fa;border:1px solid #dde0e8;border-radius:6px;">'
-              . '<div style="font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.4px;margin-bottom:12px;">'
-              . 'You might also like'
+        $uid = 'mvads' . substr(md5($widgetUrl . microtime()), 0, 8);
+
+        $html = '<style>'
+              . '#' . $uid . ' .mvads-card{transition:transform .15s ease,box-shadow .15s ease;}'
+              . '#' . $uid . ' .mvads-card:hover{transform:translateY(-3px);box-shadow:0 8px 20px rgba(20,20,40,.12);}'
+              . '#' . $uid . ' .mvads-card:hover .mvads-title{color:#3b5bdb;}'
+              . '</style>';
+
+        $html .= '<div id="' . $uid . '" style="margin:20px 0;padding:22px 24px;background:#f8f9fc;'
+              . 'border:1px solid #e2e5ee;border-radius:10px;'
+              . 'font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;">';
+
+        // Branded header: this shop's own logo + name, so the grid reads as "more from the
+        // people who made the module you're using" rather than an anonymous ad block.
+        $html .= '<div style="display:flex;align-items:center;justify-content:space-between;'
+              . 'flex-wrap:wrap;gap:10px;margin-bottom:18px;">'
+              . '<div style="display:flex;align-items:center;gap:10px;">';
+        if ($shopLogoUrl !== '') {
+            $html .= '<img src="' . htmlspecialchars($shopLogoUrl, ENT_QUOTES, 'UTF-8') . '" alt="" '
+                   . 'style="width:32px;height:32px;object-fit:contain;border-radius:6px;background:#fff;'
+                   . 'border:1px solid #e2e5ee;padding:3px;">';
+        }
+        $html .= '<div>'
+              . '<div style="font-size:11px;font-weight:700;color:#9096a8;text-transform:uppercase;'
+              . 'letter-spacing:.5px;">You might also like</div>'
+              . '<div style="font-size:14px;font-weight:700;color:#222;">'
+              . ($shopName !== '' ? 'More modules from ' . htmlspecialchars($shopName, ENT_QUOTES, 'UTF-8') : 'More modules')
               . '</div>'
-              . '<div style="display:flex;flex-wrap:wrap;gap:12px;">';
+              . '</div>'
+              . '</div>';
+        if ($shopUrl !== '' && $shopName !== '') {
+            $html .= '<a href="' . htmlspecialchars($shopUrl, ENT_QUOTES, 'UTF-8') . '" target="_blank" rel="noopener" '
+                   . 'style="font-size:12.5px;font-weight:600;color:#3b5bdb;text-decoration:none;white-space:nowrap;">'
+                   . 'Visit ' . htmlspecialchars($shopName, ENT_QUOTES, 'UTF-8') . ' &rarr;'
+                   . '</a>';
+        }
+        $html .= '</div>';
+
+        $html .= '<div style="display:flex;flex-wrap:wrap;gap:18px;">';
 
         foreach ($items as $item) {
             $name = isset($item['name']) ? (string) $item['name'] : '';
@@ -71,23 +109,26 @@ class MegVentureAdsWidget
                 continue;
             }
             $html .= '<a href="' . htmlspecialchars($link, ENT_QUOTES, 'UTF-8') . '" target="_blank" rel="noopener" '
-                   . 'style="width:180px;text-decoration:none;border:1px solid #dde0e8;border-radius:6px;overflow:hidden;'
-                   . 'box-shadow:0 1px 3px rgba(0,0,0,.06);background:#fff;display:flex;flex-direction:column;">';
+                   . 'class="mvads-card" '
+                   . 'style="width:260px;text-decoration:none;border:1px solid #e2e5ee;border-radius:8px;'
+                   . 'overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.05);background:#fff;'
+                   . 'display:flex;flex-direction:column;">';
             if ($img !== '') {
                 $html .= '<img src="' . htmlspecialchars($img, ENT_QUOTES, 'UTF-8') . '" '
-                       . 'style="width:100%;height:150px;object-fit:cover;display:block;">';
+                       . 'style="width:100%;height:180px;object-fit:cover;display:block;background:#eef0f6;">';
             }
-            $html .= '<div style="padding:8px 10px 10px;flex:1;display:flex;flex-direction:column;">'
-                   . '<div style="font-size:13px;font-weight:600;color:#222;line-height:1.35;margin-bottom:4px;">'
+            $html .= '<div style="padding:14px 16px 16px;flex:1;display:flex;flex-direction:column;">'
+                   . '<div class="mvads-title" style="font-size:15px;font-weight:700;color:#222;line-height:1.35;'
+                   . 'margin-bottom:6px;">'
                    . htmlspecialchars($name, ENT_QUOTES, 'UTF-8')
                    . '</div>';
             if ($desc !== '') {
-                $html .= '<div style="font-size:11px;color:#888;line-height:1.4;margin-bottom:6px;flex:1;">'
+                $html .= '<div style="font-size:12.5px;color:#888;line-height:1.5;margin-bottom:10px;flex:1;">'
                        . htmlspecialchars($desc, ENT_QUOTES, 'UTF-8')
                        . '</div>';
             }
             if ($price !== '') {
-                $html .= '<div style="font-size:13px;font-weight:700;color:#0ca678;margin-top:auto;">'
+                $html .= '<div style="font-size:16px;font-weight:700;color:#0ca678;margin-top:auto;">'
                        . htmlspecialchars($price, ENT_QUOTES, 'UTF-8')
                        . '</div>';
             }
@@ -100,8 +141,10 @@ class MegVentureAdsWidget
     }
 
     /** Same dual cURL/stream-context GET pattern used throughout MEG Venture modules. */
-    private static function fetchItems($url)
+    private static function fetchData($url)
     {
+        $empty = ['items' => [], 'shop_name' => '', 'shop_logo_url' => '', 'shop_url' => ''];
+
         $body = null;
         if (function_exists('curl_init')) {
             $ch = curl_init($url);
@@ -127,10 +170,18 @@ class MegVentureAdsWidget
         }
 
         if ($body === null) {
-            return [];
+            return $empty;
         }
         $data = json_decode($body, true);
+        if (!is_array($data)) {
+            return $empty;
+        }
 
-        return isset($data['items']) && is_array($data['items']) ? $data['items'] : [];
+        return [
+            'items' => isset($data['items']) && is_array($data['items']) ? $data['items'] : [],
+            'shop_name' => isset($data['shop_name']) ? (string) $data['shop_name'] : '',
+            'shop_logo_url' => isset($data['shop_logo_url']) ? (string) $data['shop_logo_url'] : '',
+            'shop_url' => isset($data['shop_url']) ? (string) $data['shop_url'] : '',
+        ];
     }
 }
