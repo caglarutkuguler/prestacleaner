@@ -55,29 +55,43 @@ class MegVentureAdsWidget
             return '';
         }
 
-        $html = '<div style="margin:16px 0;padding:14px 16px;background:#f5f6fa;border:1px solid #dde0e8;border-radius:6px;">'
-              . '<div style="font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.4px;margin-bottom:10px;">'
+        $html = '<div style="margin:16px 0;padding:16px 18px;background:#f5f6fa;border:1px solid #dde0e8;border-radius:6px;">'
+              . '<div style="font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.4px;margin-bottom:12px;">'
               . 'You might also like'
               . '</div>'
-              . '<div style="display:flex;flex-wrap:wrap;gap:10px;">';
+              . '<div style="display:flex;flex-wrap:wrap;gap:12px;">';
 
         foreach ($items as $item) {
             $name = isset($item['name']) ? (string) $item['name'] : '';
             $link = isset($item['link_url']) ? (string) $item['link_url'] : '';
             $img = isset($item['image_url']) ? (string) $item['image_url'] : '';
+            $desc = isset($item['description_short']) ? (string) $item['description_short'] : '';
+            $price = isset($item['price_formatted']) ? (string) $item['price_formatted'] : '';
             if ($name === '' || $link === '') {
                 continue;
             }
             $html .= '<a href="' . htmlspecialchars($link, ENT_QUOTES, 'UTF-8') . '" target="_blank" rel="noopener" '
-                   . 'style="width:110px;text-decoration:none;border:1px solid #dde0e8;border-radius:6px;overflow:hidden;'
-                   . 'box-shadow:0 1px 3px rgba(0,0,0,.06);background:#fff;">';
+                   . 'style="width:180px;text-decoration:none;border:1px solid #dde0e8;border-radius:6px;overflow:hidden;'
+                   . 'box-shadow:0 1px 3px rgba(0,0,0,.06);background:#fff;display:flex;flex-direction:column;">';
             if ($img !== '') {
                 $html .= '<img src="' . htmlspecialchars($img, ENT_QUOTES, 'UTF-8') . '" '
-                       . 'style="width:100%;height:80px;object-fit:cover;display:block;">';
+                       . 'style="width:100%;height:150px;object-fit:cover;display:block;">';
             }
-            $html .= '<div style="padding:5px 6px;font-size:11px;color:#333;line-height:1.3;max-height:28px;overflow:hidden;">'
+            $html .= '<div style="padding:8px 10px 10px;flex:1;display:flex;flex-direction:column;">'
+                   . '<div style="font-size:13px;font-weight:600;color:#222;line-height:1.35;margin-bottom:4px;">'
                    . htmlspecialchars($name, ENT_QUOTES, 'UTF-8')
-                   . '</div></a>';
+                   . '</div>';
+            if ($desc !== '') {
+                $html .= '<div style="font-size:11px;color:#888;line-height:1.4;margin-bottom:6px;flex:1;">'
+                       . htmlspecialchars($desc, ENT_QUOTES, 'UTF-8')
+                       . '</div>';
+            }
+            if ($price !== '') {
+                $html .= '<div style="font-size:13px;font-weight:700;color:#0ca678;margin-top:auto;">'
+                       . htmlspecialchars($price, ENT_QUOTES, 'UTF-8')
+                       . '</div>';
+            }
+            $html .= '</div></a>';
         }
 
         $html .= '</div></div>';
