@@ -1325,6 +1325,7 @@ class PrestaCleaner extends Module
 
     public function getContent()
     {
+        require_once _PS_MODULE_DIR_ . 'prestacleaner/classes/MegVentureAdsWidget.php';
         $banner = '';
 
         if (Tools::isSubmit('submitPrestacleanerSettings')) {
@@ -1378,7 +1379,8 @@ class PrestaCleaner extends Module
                 'submitPreviewTruncateSales', 'submitApplyTruncateSales', 'confirm_phrase_sales', self::CONFIRM_PHRASE_SALES
             )
             .$this->renderDeleteOrdersPanel()
-            .'</div>';
+            .'</div>'
+            .MegVentureAdsWidget::render('https://megventure.com/index.php?fc=module&module=virtualproductcombination&controller=adswidget');
     }
 
     protected function getConfigureUrl()
