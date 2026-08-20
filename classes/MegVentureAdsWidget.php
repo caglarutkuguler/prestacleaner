@@ -131,16 +131,15 @@ class MegVentureAdsWidget
                    . 'overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.05);background:#fff;'
                    . 'display:flex;flex-direction:column;">';
             if ($img !== '') {
-                // These source images are full marketing banners (a badge, a small centered
-                // mockup graphic, a caption, on a lot of decorative background) — the actual
-                // content occupies a small fraction of the frame regardless of crop mode, so
-                // neither 'cover' nor plain 'contain' makes it noticeably more legible. A
-                // moderate center zoom (cover + scale) crops the outer decorative margin away
-                // and enlarges the middle where the real mockup graphic lives.
-                $html .= '<div style="width:100%;height:220px;background:#0f1c2e;overflow:hidden;">'
+                // Match the Hummingbird theme's own product-listing image treatment (see e.g.
+                // /en/12-free-modules): a plain SQUARE box, no crop/zoom. These source images
+                // are natively 1:1 (1600x1600) — the previous landscape-ish box (260x220) added
+                // its own extra letterboxing on top of the images' built-in decorative padding,
+                // and the zoom-crop was compensating for that mismatch rather than fixing it.
+                // A square box needs neither: the image already fills it edge to edge.
+                $html .= '<div style="width:100%;height:260px;background:#0f1c2e;overflow:hidden;">'
                        . '<img src="' . htmlspecialchars($img, ENT_QUOTES, 'UTF-8') . '" '
-                       . 'style="width:100%;height:100%;object-fit:cover;object-position:center;'
-                       . 'transform:scale(1.45);display:block;">'
+                       . 'style="width:100%;height:100%;object-fit:contain;display:block;">'
                        . '</div>';
             }
             $html .= '<div style="padding:14px 16px 16px;flex:1;display:flex;flex-direction:column;">'
