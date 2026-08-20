@@ -131,14 +131,16 @@ class MegVentureAdsWidget
                    . 'overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.05);background:#fff;'
                    . 'display:flex;flex-direction:column;">';
             if ($img !== '') {
-                // 'contain' on a near-square box, not 'cover': these are often UI/feature
-                // screenshots with text and small controls near the edges — cropping to fill a
-                // landscape box (the previous behavior) cut off content and made them harder to
-                // read. Showing the whole image, letterboxed if needed, keeps it legible.
-                $html .= '<div style="width:100%;height:220px;background:#eef0f6;display:flex;'
-                       . 'align-items:center;justify-content:center;overflow:hidden;">'
+                // These source images are full marketing banners (a badge, a small centered
+                // mockup graphic, a caption, on a lot of decorative background) — the actual
+                // content occupies a small fraction of the frame regardless of crop mode, so
+                // neither 'cover' nor plain 'contain' makes it noticeably more legible. A
+                // moderate center zoom (cover + scale) crops the outer decorative margin away
+                // and enlarges the middle where the real mockup graphic lives.
+                $html .= '<div style="width:100%;height:220px;background:#0f1c2e;overflow:hidden;">'
                        . '<img src="' . htmlspecialchars($img, ENT_QUOTES, 'UTF-8') . '" '
-                       . 'style="max-width:100%;max-height:100%;object-fit:contain;display:block;">'
+                       . 'style="width:100%;height:100%;object-fit:cover;object-position:center;'
+                       . 'transform:scale(1.45);display:block;">'
                        . '</div>';
             }
             $html .= '<div style="padding:14px 16px 16px;flex:1;display:flex;flex-direction:column;">'
