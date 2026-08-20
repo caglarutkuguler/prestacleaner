@@ -1,8 +1,8 @@
 <?php
 /**
  * @author    MEG Venture <info@megventure.com>
- * @copyright 2019-2026 MEG Venture
- * @license   https://opensource.org/licenses/AFL-3.0 Academic Free License (AFL 3.0)
+ * @copyright 2019-2026 MEG Venture & Consulting Ltd.
+ * @license   https://opensource.org/licenses/MIT MIT License
  */
 if (!defined('_PS_VERSION_')) {
     exit;
