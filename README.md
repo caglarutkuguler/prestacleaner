@@ -4,6 +4,8 @@ Safely clean up a PrestaShop database: fix orphan rows left behind by deleted pr
 
 **Compatibility:** PrestaShop 1.7.0 and above (including PrestaShop 8 and 9).
 
+**Installable zip:** the archive GitHub generates on the releases page is a source snapshot, not an installable module — PrestaShop rejects it because the folder inside carries the version number. Download the ready-to-install zip from [megventure.com](https://megventure.com/en/free-modules/90-prestashop-database-cleaner-module.html).
+
 ## What it does
 
 - **Store health score** - a live, computed score (not a static claim) on the configure page, with the specific reasons behind it. The same score also appears as a circular badge in the left column of the PrestaShop Dashboard (not on every back-office page), clearly labelled as coming from this module, with a link back to the configure page.
