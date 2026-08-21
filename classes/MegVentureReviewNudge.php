@@ -26,9 +26,15 @@
  *  1. Copy this file into that module as `classes/MegVentureReviewNudge.php`.
  *     It has no dependency on anything outside the module folder.
  *  2. Adjust the constants below: CONFIG_PREFIX to that module's own prefix,
- *     REVIEW_URL to that module's product page form. For a module sold on
- *     PrestaShop Addons, REVIEW_URL is simply the Addons product page URL
- *     (with or without a {lang} placeholder) — a one-line change.
+ *     REVIEW_URL to that module's product page form. For the four modules
+ *     sold on PrestaShop Addons (squaremeter, strongpassword, recaptcha_v3,
+ *     onefee), REVIEW_URL is https://addons.prestashop.com/en/ratings.php —
+ *     the buyer's "My reviews" page, the only URL that reaches the Addons
+ *     review form. Never append the ?search= parameter seen on Addons
+ *     product pages: it filters nothing and is keyed on a product name that
+ *     drifts (memory/addons-review-link.md). A REVIEW_URL without a {lang}
+ *     placeholder passes through reviewUrl() untouched, so it is a
+ *     one-line change either way.
  *  3. In install():    MegVentureReviewNudge::onInstall()
  *     In uninstall():  MegVentureReviewNudge::onUninstall()
  *     In getContent(): $out = MegVentureReviewNudge::handleRequest($this)
