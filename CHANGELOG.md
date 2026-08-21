@@ -2,6 +2,11 @@
 
 All notable changes to **Database Cleaner** (`prestacleaner`).
 
+## 3.4.0
+
+### Added
+- A one-line review request on the module's own configure page (and nowhere else). It first appears 21 days after install — for existing installations, 21 days after this upgrade — and disappears forever once the merchant clicks the review link, clicks "No thanks", or has simply seen it three times. The link goes to the module's review form on megventure.com, in the back office language where the shop serves it. What it does **not** do: no tracking, no external request of any kind (the line is plain HTML; the review link routes through the configure page so the click is remembered, then the merchant's own browser is sent to the form), no JavaScript required, and nothing stored beyond three of the module's own prefixed configuration values (install timestamp, dismissed flag, display count), all removed on uninstall.
+
 ## 3.3.1
 
 ### Fixed

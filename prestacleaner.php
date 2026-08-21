@@ -50,7 +50,7 @@ class PrestaCleaner extends Module
     {
         $this->name = 'prestacleaner';
         $this->tab = 'administration';
-        $this->version = '3.3.1';
+        $this->version = '3.4.0';
         $this->author = 'MEG Venture';
         $this->need_instance = 0;
         $this->multishop_context = Shop::CONTEXT_ALL;
@@ -66,9 +66,12 @@ class PrestaCleaner extends Module
 
     public function install()
     {
+        require_once _PS_MODULE_DIR_ . 'prestacleaner/classes/MegVentureReviewNudge.php';
+
         return parent::install()
             && $this->registerHook('actionAdminControllerSetMedia')
             && $this->registerHook('dashboardZoneOne')
+            && MegVentureReviewNudge::onInstall()
             && Configuration::updateGlobalValue(self::CONF_CRON_TOKEN, Tools::passwdGen(32))
             && Configuration::updateGlobalValue(self::CONF_AUTO_ENABLED, 0)
             && Configuration::updateGlobalValue(self::CONF_AUTO_INTERVAL_DAYS, 30)
@@ -82,6 +85,9 @@ class PrestaCleaner extends Module
 
     public function uninstall()
     {
+        require_once _PS_MODULE_DIR_ . 'prestacleaner/classes/MegVentureReviewNudge.php';
+        MegVentureReviewNudge::onUninstall();
+
         foreach ([
             self::CONF_CRON_TOKEN, self::CONF_AUTO_ENABLED, self::CONF_AUTO_INTERVAL_DAYS,
             self::CONF_AUTO_LAST_RUN, self::CONF_AUTO_LAST_RESULT, self::CONF_BACKUP_BEFORE_FIX,
@@ -1326,6 +1332,11 @@ class PrestaCleaner extends Module
     public function getContent()
     {
         require_once _PS_MODULE_DIR_ . 'prestacleaner/classes/MegVentureAdsWidget.php';
+        require_once _PS_MODULE_DIR_ . 'prestacleaner/classes/MegVentureReviewNudge.php';
+
+        // May redirect (review click) — before anything renders on purpose.
+        $nudge = MegVentureReviewNudge::handleRequest($this)
+            . MegVentureReviewNudge::render($this, $this->getConfigureUrl());
         $banner = '';
 
         if (Tools::isSubmit('submitPrestacleanerSettings')) {
@@ -1356,7 +1367,7 @@ class PrestaCleaner extends Module
             $banner = $this->processApplyDeleteOrders();
         }
 
-        return $this->renderStyle().'<div class="prestacleaner-wrap">'.$banner.$this->renderTutorialPanel().$this->renderHealthPanel()
+        return $this->renderStyle().'<div class="prestacleaner-wrap">'.$nudge.$banner.$this->renderTutorialPanel().$this->renderHealthPanel()
             .$this->renderSettingsForm().$this->renderBackupsPanel()
             .$this->renderActionPanel(
                 'fix', $this->trans('Check & fix', [], 'Modules.Prestacleaner.Admin'),
