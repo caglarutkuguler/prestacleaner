@@ -50,7 +50,7 @@ class PrestaCleaner extends Module
     {
         $this->name = 'prestacleaner';
         $this->tab = 'administration';
-        $this->version = '3.4.0';
+        $this->version = '3.5.0';
         $this->author = 'MEG Venture';
         $this->need_instance = 0;
         $this->multishop_context = Shop::CONTEXT_ALL;
@@ -618,6 +618,20 @@ class PrestaCleaner extends Module
             'abandoned cart(s) older than 1 month with no order'
         );
 
+        // onefee's cart-fee ledger: two configuration rows per fee line, keyed
+        // by cart id and deleted only on specific cart events - so the carts
+        // removed just above (or by anything else) leave theirs behind, and
+        // PrestaShop loads the whole configuration table into memory on every
+        // request. Placed right after the cart cleanup so freshly deleted
+        // carts are reaped in the same pass. Only rows whose cart is gone
+        // qualify: a live cart can be revived, and squaremeter prices from
+        // these very rows.
+        self::applyOrCount(
+            $mode, $logs, $handle, 'configuration',
+            self::orphanOnefeeLedgerWhere(),
+            'orphaned onefee cart-fee configuration row(s) whose cart no longer exists'
+        );
+
         self::applyOrCount(
             $mode, $logs, $handle, 'cart_rule',
             '(`active` = 0 OR `quantity` = 0 OR `date_to` < "'.pSQL(date('Y-m-d')).'")
@@ -645,6 +659,31 @@ class PrestaCleaner extends Module
         }
 
         return $logs;
+    }
+
+    /**
+     * The WHERE selecting onefee's orphaned cart-fee ledger rows.
+     *
+     * A ledger name embeds its cart id right after one of two fixed prefixes
+     * (onefee_attribute_id_{cart}_... or its _settings_ twin), so the id is
+     * the first '_'-token after the prefix - both offsets are computed from
+     * strlen() rather than written as magic numbers. The REGEXP guard admits
+     * only well-formed ledger names, so the CAST can never turn a stray
+     * configuration row into a deletable one. Public and side-effect free so
+     * the test can pin its shape.
+     *
+     * @return string
+     */
+    public static function orphanOnefeeLedgerWhere()
+    {
+        $plain = 'onefee_attribute_id_';
+        $settings = 'onefee_attribute_id_settings_';
+
+        return '`name` REGEXP \'^onefee_attribute_id_(settings_)?[0-9]+_[0-9]+_[0-9]+_[0-9]+$\''
+            .' AND CAST(SUBSTRING_INDEX(SUBSTRING(`name`,'
+            .' IF(`name` LIKE \''.str_replace('_', '\\_', $settings).'%\', '.(strlen($settings) + 1).', '.(strlen($plain) + 1).')'
+            .'), \'_\', 1) AS UNSIGNED)'
+            .' NOT IN (SELECT `id_cart` FROM `'.bqSQL(self::t('cart')).'`)';
     }
 
     /**

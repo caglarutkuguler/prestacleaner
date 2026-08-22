@@ -2,6 +2,11 @@
 
 All notable changes to **Database Cleaner** (`prestacleaner`).
 
+## 3.5.0
+
+### Added
+- **Clean & optimize now reaps onefee's orphaned cart-fee configuration rows.** The onefee module stores two configuration rows per fee line in a cart, keyed by cart id, and only specific cart events remove them — so every cart deleted by this module's own abandoned-cart cleanup (or by anything else) left its rows behind forever, and PrestaShop loads the whole configuration table into memory on every page view. The new rule runs right after the abandoned-cart cleanup and deletes only rows whose cart no longer exists; rows belonging to a living cart are never touched, however old, because a cart can come back to life and its fee pricing reads from these rows. Preview counts it, apply backs the rows up first, exactly like every other rule.
+
 ## 3.4.0
 
 ### Added
