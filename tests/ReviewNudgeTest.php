@@ -14,7 +14,13 @@
  * away forever on a click or a dismiss, must give up after three unanswered
  * displays, and uninstall must remove exactly its three keys and nothing else.
  */
-define('_PS_VERSION_', '8.1.0');
+if (!defined('_PS_VERSION_')) {
+    // Only the CLI harness may run without the shop; a web hit exits here.
+    if (PHP_SAPI !== 'cli') {
+        exit;
+    }
+    define('_PS_VERSION_', '8.1.0');
+}
 define('_PS_MODULE_DIR_', dirname(dirname(__DIR__)) . DIRECTORY_SEPARATOR);
 
 class Configuration

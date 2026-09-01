@@ -4,6 +4,9 @@
  * @copyright 2007-2026 MEG Venture & Consulting Ltd.
  * @license   https://opensource.org/licenses/MIT MIT License
  */
+if (!defined('_PS_VERSION_')) {
+    exit;
+}
 
 /**
  * ============================================================================
