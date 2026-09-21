@@ -1,5 +1,7 @@
 # Database Cleaner
 
+**Version:** 3.5.0
+
 Safely clean up a PrestaShop database: fix orphan rows left behind by deleted products, orders, languages or modules; clear out abandoned carts and dead cart rules; or reset the whole catalog / order history to start fresh. Every action can back itself up first, has a dry-run preview, and destructive actions require typing a confirmation phrase - not just ticking a box.
 
 **Compatibility:** PrestaShop 1.7.0 and above (including PrestaShop 8 and 9).
