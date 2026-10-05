@@ -1,0 +1,39 @@
+# Sevkiyat hijyeni — `git archive` ile uretilen Addons zip'inden ne cikarilir.
+#
+# KAPSAM UYARISI: `export-ignore` YALNIZCA `git archive` (ve GitHub'in
+# "Download ZIP" / release tarball'lari) icin gecerlidir. Calisma dizinini
+# `zip -r` ile paketlerseniz bu dosya hicbir sey yapmaz ve `.git/` yine sizar
+# (MEG-76). Paket daima `git archive` ile uretilir, ve gonderilmeden once
+# icerigi `zipinfo -1` ile listelenerek dogrulanir.
+#
+# Bu dosya bilincli olarak SADECE export kurallari icerir. `text`/`eol`
+# ozellikleri YOKTUR: canli deploy `git reset --hard` oldugu icin bir satir
+# sonu normalizasyonu canli agacta dosya icerigini degistirirdi.
+
+# Testler — modulun calismasi icin gerekli degil, Addons paketinde yeri yok.
+# Bu repoda 5 yol tasiyorlardi (MEG-1035 olcumu).
+tests/                  export-ignore
+
+# Repo metadatasi — pakette anlamsiz.
+.gitattributes          export-ignore
+.gitignore              export-ignore
+
+# Henuz bu repoda yok; ileride eklenirse sevk edilmesinler diye pesin kural.
+.github/                export-ignore
+.claude/                export-ignore
+_to_delete/             export-ignore
+CLAUDE.md               export-ignore
+CLAUDE.local.md         export-ignore
+node_modules/           export-ignore
+composer.lock           export-ignore
+phpunit.xml             export-ignore
+phpunit.xml.dist        export-ignore
+.php-cs-fixer.php       export-ignore
+.php-cs-fixer.dist.php  export-ignore
+
+# SEVK EDILIR (kayit icin, kural degil): CHANGELOG.md, classes/,
+# config.xml, controllers/, index.php, LICENSE, logo.png,
+# prestacleaner.php, README.md, translations/, upgrade/ ve her dizindeki
+# index.php. CHANGELOG.md bilincli olarak pakette KALIR — Addons
+# paketlerinde adet oldugu gibi, ve surum dizesini tasiyan uc kaynaktan
+# biri oldugu icin (MEG-262 Kapi 1).
