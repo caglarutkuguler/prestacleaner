@@ -57,7 +57,8 @@ class PrestacleanerCronModuleFrontController extends ModuleFrontController
         } catch (Throwable $e) {
             $this->unlock();
             PrestaShopLogger::addLog('PrestaCleaner cron: '.$e->getMessage(), 3);
-            $this->respond(500, ['success' => false, 'error' => $e->getMessage()]);
+            // Never echo exception text to an anonymous caller (path / SQL details).
+            $this->respond(500, ['success' => false, 'error' => 'Scheduled cleanup failed.']);
         }
     }
 

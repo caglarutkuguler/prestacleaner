@@ -1,8 +1,8 @@
 <?php
 /**
  * @author    MEG Venture <info@megventure.com>
- * @copyright 2007-2026 MEG Venture & Consulting Ltd.
- * @license   https://opensource.org/licenses/MIT MIT License
+ * @copyright 2007-2026 MEG Venture
+ * @license   All rights reserved
  */
 
 /**
@@ -118,8 +118,8 @@ class MegVentureAdsWidget
 
         foreach ($items as $item) {
             $name = isset($item['name']) ? (string) $item['name'] : '';
-            $link = isset($item['link_url']) ? (string) $item['link_url'] : '';
-            $img = isset($item['image_url']) ? (string) $item['image_url'] : '';
+            $link = self::safeUrl(isset($item['link_url']) ? $item['link_url'] : '');
+            $img = self::safeUrl(isset($item['image_url']) ? $item['image_url'] : '');
             $desc = isset($item['description_short']) ? (string) $item['description_short'] : '';
             $price = isset($item['price_formatted']) ? (string) $item['price_formatted'] : '';
             if ($name === '' || $link === '') {
@@ -212,16 +212,25 @@ class MegVentureAdsWidget
     {
         $empty = ['items' => [], 'shop_name' => '', 'shop_logo_url' => '', 'shop_url' => ''];
 
+        if (!self::isAllowedWidgetUrl($url)) {
+            return $empty;
+        }
+
         $body = null;
         if (function_exists('curl_init')) {
             $ch = curl_init($url);
-            curl_setopt_array($ch, [
+            $opts = [
                 CURLOPT_RETURNTRANSFER => true,
-                CURLOPT_FOLLOWLOCATION => true,
+                CURLOPT_FOLLOWLOCATION => false,
                 CURLOPT_TIMEOUT => self::TIMEOUT,
                 CURLOPT_CONNECTTIMEOUT => 2,
                 CURLOPT_SSL_VERIFYPEER => true,
-            ]);
+            ];
+            if (defined('CURLPROTO_HTTP') && defined('CURLPROTO_HTTPS')) {
+                $opts[CURLOPT_PROTOCOLS] = CURLPROTO_HTTP | CURLPROTO_HTTPS;
+                $opts[CURLOPT_REDIR_PROTOCOLS] = CURLPROTO_HTTP | CURLPROTO_HTTPS;
+            }
+            curl_setopt_array($ch, $opts);
             $result = curl_exec($ch);
             $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
             curl_close($ch);
@@ -230,7 +239,12 @@ class MegVentureAdsWidget
             }
         } else {
             $context = stream_context_create([
-                'http' => ['method' => 'GET', 'timeout' => self::TIMEOUT, 'ignore_errors' => true],
+                'http' => [
+                    'method' => 'GET',
+                    'timeout' => self::TIMEOUT,
+                    'ignore_errors' => true,
+                    'follow_location' => 0,
+                ],
             ]);
             $result = @file_get_contents($url, false, $context);
             $body = $result !== false ? $result : null;
@@ -247,8 +261,66 @@ class MegVentureAdsWidget
         return [
             'items' => isset($data['items']) && is_array($data['items']) ? $data['items'] : [],
             'shop_name' => isset($data['shop_name']) ? (string) $data['shop_name'] : '',
-            'shop_logo_url' => isset($data['shop_logo_url']) ? (string) $data['shop_logo_url'] : '',
-            'shop_url' => isset($data['shop_url']) ? (string) $data['shop_url'] : '',
+            'shop_logo_url' => self::safeUrl(isset($data['shop_logo_url']) ? $data['shop_logo_url'] : ''),
+            'shop_url' => self::safeUrl(isset($data['shop_url']) ? $data['shop_url'] : ''),
         ];
+    }
+
+    /**
+     * Every URL rendered by this widget comes out of a third-party JSON feed,
+     * which makes it untrusted input no matter who publishes it. htmlspecialchars
+     * keeps it inside the attribute but says nothing about the scheme, so a feed
+     * answering "javascript:..." or "data:text/html,..." would produce a link
+     * that runs script in the merchant's back office on click (CWE-79 via
+     * CWE-20). Only absolute http(s) URLs are renderable here; anything else
+     * becomes empty, and the caller already treats an empty URL as "no card"
+     * and "no image".
+     *
+     * @param mixed $url
+     *
+     * @return string
+     */
+    private static function safeUrl($url)
+    {
+        // A JSON feed can answer with an array or an object where a string was
+        // expected; casting that would raise a notice and produce "Array".
+        if (!is_string($url)) {
+            return '';
+        }
+
+        $url = trim($url);
+        if ($url === '') {
+            return '';
+        }
+
+        $scheme = parse_url($url, PHP_URL_SCHEME);
+        if (!is_string($scheme) || !in_array(strtolower($scheme), ['http', 'https'], true)) {
+            return '';
+        }
+
+        return $url;
+    }
+
+    /**
+     * Widget URL is authored in module PHP (not request input), but still pin
+     * host + scheme so a compromised/redirecting feed cannot become SSRF
+     * into the shop's private network (CWE-918).
+     *
+     * @param string $url
+     *
+     * @return bool
+     */
+    private static function isAllowedWidgetUrl($url)
+    {
+        $parts = parse_url((string) $url);
+        if (!is_array($parts) || empty($parts['scheme']) || empty($parts['host'])) {
+            return false;
+        }
+        if (!in_array(strtolower((string) $parts['scheme']), ['http', 'https'], true)) {
+            return false;
+        }
+        $host = strtolower((string) $parts['host']);
+
+        return $host === 'megventure.com' || $host === 'www.megventure.com';
     }
 }
