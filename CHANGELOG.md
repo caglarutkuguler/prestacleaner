@@ -2,6 +2,13 @@
 
 All notable changes to **Database Cleaner** (`prestacleaner`).
 
+## 3.5.1
+
+### Security
+- **Cron token entropy** — install / regenerate / upgrade now use `bin2hex(random_bytes(16))` instead of `Tools::passwdGen(32)`. Opening the configure page (or running the 3.5.1 upgrade) rotates any legacy weak secret once; update any server cron that still points at the old URL.
+- **Promo ads widget** — scheme allowlist on every URL from the remote feed (blocks `javascript:` / `data:` in back-office `href`/`src`); fetch pins `megventure.com` and disables redirect following.
+- **Cron error responses** — anonymous callers no longer receive exception text; failures log server-side and return a generic message.
+
 ## 3.5.0
 
 ### Added

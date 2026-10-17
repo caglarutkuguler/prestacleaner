@@ -50,7 +50,7 @@ class PrestaCleaner extends Module
     {
         $this->name = 'prestacleaner';
         $this->tab = 'administration';
-        $this->version = '3.5.0';
+        $this->version = '3.5.1';
         $this->author = 'MEG Venture';
         $this->need_instance = 0;
         $this->multishop_context = Shop::CONTEXT_ALL;
@@ -72,7 +72,7 @@ class PrestaCleaner extends Module
             && $this->registerHook('actionAdminControllerSetMedia')
             && $this->registerHook('dashboardZoneOne')
             && MegVentureReviewNudge::onInstall()
-            && Configuration::updateGlobalValue(self::CONF_CRON_TOKEN, Tools::passwdGen(32))
+            && Configuration::updateGlobalValue(self::CONF_CRON_TOKEN, self::generateCronToken())
             && Configuration::updateGlobalValue(self::CONF_AUTO_ENABLED, 0)
             && Configuration::updateGlobalValue(self::CONF_AUTO_INTERVAL_DAYS, 30)
             && Configuration::updateGlobalValue(self::CONF_AUTO_LAST_RUN, 0)
@@ -228,6 +228,49 @@ class PrestaCleaner extends Module
     public function getCronUrl()
     {
         return $this->context->link->getModuleLink($this->name, 'cron', ['token' => Configuration::get(self::CONF_CRON_TOKEN)], null);
+    }
+
+    /**
+     * Cryptographically strong cron secret (32 hex chars / 128 bits).
+     *
+     * @return string
+     */
+    public static function generateCronToken()
+    {
+        return bin2hex(random_bytes(16));
+    }
+
+    /**
+     * Legacy tokens came from Tools::passwdGen(32) (mt_rand-backed on PS 1.7 era
+     * cores — CWE-330). Strong tokens are exactly 32 lowercase hex chars.
+     *
+     * @param string $token
+     *
+     * @return bool
+     */
+    public static function isWeakCronToken($token)
+    {
+        $token = (string) $token;
+
+        return $token === '' || !preg_match('/^[a-f0-9]{32}$/', $token);
+    }
+
+    /**
+     * Rotate empty/legacy cron secrets in place. Returns true when a new token
+     * was written (caller should tell the merchant to update any server cron).
+     *
+     * @return bool
+     */
+    public static function ensureStrongCronToken()
+    {
+        $token = (string) Configuration::get(self::CONF_CRON_TOKEN);
+        if (!self::isWeakCronToken($token)) {
+            return false;
+        }
+
+        Configuration::updateGlobalValue(self::CONF_CRON_TOKEN, self::generateCronToken());
+
+        return true;
     }
 
     /*
@@ -1373,10 +1416,15 @@ class PrestaCleaner extends Module
         require_once _PS_MODULE_DIR_ . 'prestacleaner/classes/MegVentureAdsWidget.php';
         require_once _PS_MODULE_DIR_ . 'prestacleaner/classes/MegVentureReviewNudge.php';
 
+        // Rotate legacy Tools::passwdGen tokens before the page prints the cron URL.
+        $rotatedCron = self::ensureStrongCronToken();
+
         // May redirect (review click) — before anything renders on purpose.
         $nudge = MegVentureReviewNudge::handleRequest($this)
             . MegVentureReviewNudge::render($this, $this->getConfigureUrl());
-        $banner = '';
+        $banner = $rotatedCron
+            ? $this->alert('warning', $this->trans('A new scheduled-cleaning URL was generated because the previous secret used a weak generator. Update it wherever your old one was configured.', [], 'Modules.Prestacleaner.Admin'))
+            : '';
 
         if (Tools::isSubmit('submitPrestacleanerSettings')) {
             $banner = $this->processSettings();
@@ -1475,7 +1523,7 @@ class PrestaCleaner extends Module
 
     protected function processRegenToken()
     {
-        Configuration::updateGlobalValue(self::CONF_CRON_TOKEN, Tools::passwdGen(32));
+        Configuration::updateGlobalValue(self::CONF_CRON_TOKEN, self::generateCronToken());
 
         return $this->alert('success', $this->trans('A new scheduled-cleaning URL was generated below. Update it wherever your old one was configured.', [], 'Modules.Prestacleaner.Admin'));
     }
