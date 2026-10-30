@@ -46,7 +46,7 @@ function ok($condition, $label)
     }
 }
 
-$method = new ReflectionMethod('MegVentureAdsWidget', 'safeUrl');
+$method = new ReflectionMethod('MegVentureAdsWidgetV2', 'safeUrl');
 $method->setAccessible(true);
 
 /**

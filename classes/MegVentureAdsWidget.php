@@ -7,7 +7,7 @@
 
 /**
  * ============================================================================
- *  MegVentureAdsWidget — drop-in "you might also like" widget for MEG Venture
+ *  MegVentureAdsWidgetV2 — drop-in "you might also like" widget for MEG Venture
  *  modules. This file is NOT part of virtualproductcombination's own runtime;
  *  it's a template meant to be copied into each OTHER module you distribute
  *  (onefee, cloudflare, ...), so its own admin configuration page can show a
@@ -23,15 +23,15 @@
  *  3. In the OTHER module's getContent(), add:
  *
  *       require_once _PS_MODULE_DIR_ . 'yourmodule/classes/MegVentureAdsWidget.php';
- *       $output .= MegVentureAdsWidget::render('https://megventure.com/.../adswidget');
+ *       $output .= MegVentureAdsWidgetV2::render('https://megventure.com/.../adswidget');
  *
  *     (append $output near the top or bottom of whatever getContent() already
  *     returns — it renders to an empty string if the widget URL is unreachable
  *     or misconfigured, so it can never break that module's own settings page.)
  *  -----------------------------------------------------------------------
  */
-if (!class_exists('MegVentureAdsWidget')) {
-class MegVentureAdsWidget
+if (!class_exists('MegVentureAdsWidgetV2')) {
+class MegVentureAdsWidgetV2
 {
     const TIMEOUT = 3;
 

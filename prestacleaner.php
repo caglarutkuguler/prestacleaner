@@ -1478,7 +1478,7 @@ class PrestaCleaner extends Module
             )
             .$this->renderDeleteOrdersPanel()
             .'</div>'
-            .MegVentureAdsWidget::render('https://megventure.com/index.php?fc=module&module=virtualproductcombination&controller=adswidget');
+            .MegVentureAdsWidgetV2::render('https://megventure.com/index.php?fc=module&module=virtualproductcombination&controller=adswidget');
     }
 
     protected function getConfigureUrl()
