@@ -30,6 +30,7 @@
  *     or misconfigured, so it can never break that module's own settings page.)
  *  -----------------------------------------------------------------------
  */
+if (!class_exists('MegVentureAdsWidget')) {
 class MegVentureAdsWidget
 {
     const TIMEOUT = 3;
@@ -43,6 +44,12 @@ class MegVentureAdsWidget
     {
         $widgetUrl = trim((string) $widgetUrl);
         if ($widgetUrl === '') {
+            return '';
+        }
+
+        // Hidden by the merchant (Hide button): remembered in a cookie shared by
+        // every MEG Venture module, and nothing is fetched from megventure.com.
+        if (self::isHidden()) {
             return '';
         }
 
@@ -204,9 +211,47 @@ class MegVentureAdsWidget
               . 'startAuto();'
               . '})();</script>';
 
+        $html .= self::hideControl($uid);
+
         return $html;
     }
 
+    const HIDE_COOKIE = 'mvads_hidden';
+
+    /**
+     * @return bool
+     */
+    private static function isHidden()
+    {
+        return isset($_COOKIE[self::HIDE_COOKIE]) && $_COOKIE[self::HIDE_COOKIE] === '1';
+    }
+
+    /**
+     * "Hide" button: removes the widget and remembers the choice in a cookie
+     * for this browser (ten years, every MEG Venture module). Plain
+     * JavaScript, no request to the shop or to megventure.com.
+     *
+     * @param string $uid
+     *
+     * @return string
+     */
+    private static function hideControl($uid)
+    {
+        return '<script>(function(){'
+            . 'var root=document.getElementById(' . json_encode($uid) . ');if(!root)return;'
+            . 'root.style.position="relative";root.style.paddingTop="38px";'
+            . 'var b=document.createElement("button");b.type="button";'
+            . 'b.title="Hide these suggestions in all MEG Venture modules";'
+            . 'b.textContent="Hide \u00d7";'
+            . 'b.style.cssText="position:absolute;top:10px;right:12px;border:1px solid #e2e5ee;border-radius:12px;'
+            . 'background:#fff;color:#6c7280;font-size:11.5px;font-weight:600;line-height:1;padding:5px 10px;cursor:pointer;";'
+            . 'b.addEventListener("click",function(){'
+            . 'document.cookie="' . self::HIDE_COOKIE . '=1; path=/; max-age=315360000; SameSite=Lax";'
+            . 'if(root.parentNode){root.parentNode.removeChild(root);}'
+            . '});'
+            . 'root.appendChild(b);'
+            . '})();</script>';
+    }
     /** Same dual cURL/stream-context GET pattern used throughout MEG Venture modules. */
     private static function fetchData($url)
     {
@@ -323,4 +368,5 @@ class MegVentureAdsWidget
 
         return $host === 'megventure.com' || $host === 'www.megventure.com';
     }
+}
 }
