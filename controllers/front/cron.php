@@ -52,6 +52,7 @@ class PrestacleanerCronModuleFrontController extends ModuleFrontController
                 'success' => true,
                 'fix_queries' => count($result['fix']),
                 'optimize_queries' => count($result['optimize']),
+                'cart_orphans_rows' => $result['cart_orphans'] ? array_sum(array_column($result['cart_orphans']['logs'], 'count')) : null,
                 'ran_at' => $result['ran_at'],
             ]);
         } catch (Throwable $e) {

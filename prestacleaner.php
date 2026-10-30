@@ -33,11 +33,16 @@ class PrestaCleaner extends Module
     const CONF_BACKUP_BEFORE_OPTIMIZE = 'PRESTACLEANER_BACKUP_BEFORE_OPTIMIZE';
     const CONF_BACKUP_BEFORE_TRUNCATE = 'PRESTACLEANER_BACKUP_BEFORE_TRUNCATE';
     const CONF_BACKUP_BEFORE_DELETE_ORDERS = 'PRESTACLEANER_BACKUP_BEFORE_DELETE_ORDERS';
+    const CONF_BACKUP_BEFORE_CART_ORPHANS = 'PRESTACLEANER_BACKUP_BEFORE_CART_ORPHANS';
+    const CONF_AUTO_CART_ORPHANS = 'PRESTACLEANER_AUTO_CART_ORPHANS';
     const CONF_BACKUP_RETENTION_DAYS = 'PRESTACLEANER_BACKUP_RETENTION_DAYS';
     const CONF_HEALTH_CACHE = 'PRESTACLEANER_HEALTH_CACHE';
 
-    /** Auto (scheduled) runs only ever perform these two, always-reversible-by-nature actions. Truncation can never be scheduled. */
-    const AUTO_RUN_ACTIONS = ['fix', 'optimize'];
+    /** Auto (scheduled) runs only ever perform these backed-up orphan cleanups ('cart_orphans' only when opted in). Truncation can never be scheduled. */
+    const AUTO_RUN_ACTIONS = ['fix', 'optimize', 'cart_orphans'];
+
+    /** Preview tables list at most this many rows per pattern; the counts above them are always the full totals. */
+    const CART_ORPHANS_PREVIEW_LIMIT = 200;
 
     /** Typed, case-insensitive confirmation phrases required (server-side) before either truncation runs. */
     const CONFIRM_PHRASE_CATALOG = 'DELETE CATALOG';
@@ -50,7 +55,7 @@ class PrestaCleaner extends Module
     {
         $this->name = 'prestacleaner';
         $this->tab = 'administration';
-        $this->version = '3.5.1';
+        $this->version = '3.6.0';
         $this->author = 'MEG Venture';
         $this->need_instance = 0;
         $this->multishop_context = Shop::CONTEXT_ALL;
@@ -80,6 +85,8 @@ class PrestaCleaner extends Module
             && Configuration::updateGlobalValue(self::CONF_BACKUP_BEFORE_OPTIMIZE, 1)
             && Configuration::updateGlobalValue(self::CONF_BACKUP_BEFORE_TRUNCATE, 1)
             && Configuration::updateGlobalValue(self::CONF_BACKUP_BEFORE_DELETE_ORDERS, 1)
+            && Configuration::updateGlobalValue(self::CONF_BACKUP_BEFORE_CART_ORPHANS, 1)
+            && Configuration::updateGlobalValue(self::CONF_AUTO_CART_ORPHANS, 0)
             && Configuration::updateGlobalValue(self::CONF_BACKUP_RETENTION_DAYS, 14);
     }
 
@@ -92,7 +99,8 @@ class PrestaCleaner extends Module
             self::CONF_CRON_TOKEN, self::CONF_AUTO_ENABLED, self::CONF_AUTO_INTERVAL_DAYS,
             self::CONF_AUTO_LAST_RUN, self::CONF_AUTO_LAST_RESULT, self::CONF_BACKUP_BEFORE_FIX,
             self::CONF_BACKUP_BEFORE_OPTIMIZE, self::CONF_BACKUP_BEFORE_TRUNCATE,
-            self::CONF_BACKUP_BEFORE_DELETE_ORDERS, self::CONF_BACKUP_RETENTION_DAYS, self::CONF_HEALTH_CACHE,
+            self::CONF_BACKUP_BEFORE_DELETE_ORDERS, self::CONF_BACKUP_BEFORE_CART_ORPHANS, self::CONF_AUTO_CART_ORPHANS,
+            self::CONF_BACKUP_RETENTION_DAYS, self::CONF_HEALTH_CACHE,
         ] as $key) {
             Configuration::deleteByName($key);
         }
@@ -208,6 +216,11 @@ class PrestaCleaner extends Module
         $result = [
             'fix' => self::runCheckAndFix((bool) Configuration::get(self::CONF_BACKUP_BEFORE_FIX)),
             'optimize' => self::runCleanAndOptimize($backupBeforeOptimize),
+            // Opt-in: unlike the two above it removes lines from carts a shopper
+            // may still have open, so it only joins the schedule when ticked.
+            'cart_orphans' => Configuration::get(self::CONF_AUTO_CART_ORPHANS)
+                ? self::runCartOrphanCleanup((bool) Configuration::get(self::CONF_BACKUP_BEFORE_CART_ORPHANS), 'scheduled')
+                : null,
             'ran_at' => date('Y-m-d H:i:s'),
         ];
 
@@ -215,6 +228,7 @@ class PrestaCleaner extends Module
         Configuration::updateGlobalValue(self::CONF_AUTO_LAST_RESULT, json_encode([
             'fix_queries' => count($result['fix']),
             'optimize_queries' => count($result['optimize']),
+            'cart_orphans_rows' => $result['cart_orphans'] ? array_sum(array_column($result['cart_orphans']['logs'], 'count')) : null,
             'ran_at' => $result['ran_at'],
         ]));
 
@@ -729,10 +743,239 @@ class PrestaCleaner extends Module
             .' NOT IN (SELECT `id_cart` FROM `'.bqSQL(self::t('cart')).'`)';
     }
 
+    /*
+     * ----------------------------------------------------------------
+     * Orphaned cart data
+     *
+     * Two kinds of cart rows that raw cart queries still count but no valid
+     * cart line stands behind:
+     *  A) customizations still marked in_cart whose product has no live
+     *     customization field left (customization was switched off later);
+     *  B) cart lines stored against cart id 0, which no real cart can have
+     *     because cart ids start at 1 (squaremeter's phantom-cart bug wrote
+     *     these for every new visitor).
+     * A cart that already became an order is never touched: its
+     * customization is part of that order's record, so it is reported for
+     * manual review instead. Preview and apply both start from
+     * findCartOrphans(), so the two can never disagree.
+     * ----------------------------------------------------------------
+     */
+
+    /**
+     * Pattern A detection. NOT EXISTS instead of LEFT JOIN + GROUP BY keeps
+     * it valid under ONLY_FULL_GROUP_BY. $softDelete adds the is_deleted
+     * filter on cores whose customization_field has that column (1.7.2
+     * does not) - there, removing a field only flags it, so a product
+     * whose fields are all flagged has none left either.
+     *
+     * @param bool $softDelete
+     *
+     * @return string
+     */
+    public static function orphanCustomizationSql($softDelete)
+    {
+        return 'SELECT c.`id_customization`, c.`id_cart`, c.`id_product`, c.`id_product_attribute`,
+                (SELECT MIN(cp.`date_add`) FROM `'.bqSQL(self::t('cart_product')).'` cp
+                    WHERE cp.`id_cart` = c.`id_cart` AND cp.`id_customization` = c.`id_customization`) AS date_add
+            FROM `'.bqSQL(self::t('customization')).'` c
+            WHERE c.`in_cart` = 1
+                AND NOT EXISTS (SELECT 1 FROM `'.bqSQL(self::t('customization_field')).'` cf
+                    WHERE cf.`id_product` = c.`id_product`'.($softDelete ? ' AND cf.`is_deleted` = 0' : '').')
+            ORDER BY c.`id_cart`, c.`id_customization`';
+    }
+
+    /**
+     * Pattern B. `cart_product`.`id_cart` is NOT NULL in every supported
+     * core, so 0 is the only invalid value it can hold.
+     *
+     * @return string
+     */
+    public static function phantomCartLineWhere()
+    {
+        return '`id_cart` = 0';
+    }
+
+    protected static function hasColumn($table, $column)
+    {
+        return (bool) Db::getInstance()->executeS(
+            'SHOW COLUMNS FROM `'.bqSQL(self::t($table)).'` LIKE \''.pSQL($column).'\''
+        );
+    }
+
+    /**
+     * @return array{customizations:array,skipped:array,phantom:array,phantom_count:int}
+     */
+    public static function findCartOrphans()
+    {
+        $db = Db::getInstance();
+        $customizations = $db->executeS(self::orphanCustomizationSql(self::hasColumn('customization_field', 'is_deleted'))) ?: [];
+
+        $ordersByCart = [];
+        $cartIds = array_unique(array_map('intval', array_column($customizations, 'id_cart')));
+        if ($cartIds) {
+            $orders = $db->executeS(
+                'SELECT `id_order`, `id_cart` FROM `'.bqSQL(self::t('orders')).'` WHERE `id_cart` IN ('.implode(',', $cartIds).')'
+            ) ?: [];
+            foreach ($orders as $order) {
+                $ordersByCart[(int) $order['id_cart']][] = (int) $order['id_order'];
+            }
+        }
+
+        $safe = [];
+        $skipped = [];
+        foreach ($customizations as $row) {
+            if (isset($ordersByCart[(int) $row['id_cart']])) {
+                $row['id_orders'] = $ordersByCart[(int) $row['id_cart']];
+                $skipped[] = $row;
+            } else {
+                $safe[] = $row;
+            }
+        }
+
+        $cartProduct = bqSQL(self::t('cart_product'));
+
+        return [
+            'customizations' => $safe,
+            'skipped' => $skipped,
+            'phantom' => $db->executeS(
+                'SELECT `id_cart`, `id_product`, `id_product_attribute`, `id_customization`, `quantity`, `date_add`
+                FROM `'.$cartProduct.'` WHERE '.self::phantomCartLineWhere().'
+                ORDER BY `date_add` DESC LIMIT '.(int) self::CART_ORPHANS_PREVIEW_LIMIT
+            ) ?: [],
+            'phantom_count' => (int) $db->getValue('SELECT COUNT(*) FROM `'.$cartProduct.'` WHERE '.self::phantomCartLineWhere()),
+        ];
+    }
+
+    /**
+     * Deletes both patterns in one transaction, child rows first. On any
+     * failure everything is rolled back (PrestaShop's tables are InnoDB by
+     * default; a MyISAM table would ignore the rollback). Rows belonging to
+     * a cart with an order are left in place and returned as 'skipped'.
+     *
+     * @param bool $backup
+     * @param string $trigger 'manual' or 'scheduled', recorded in the log
+     *
+     * @return array{logs:array,backup_file:string|false,skipped:array,removed_customizations:int,removed_phantom:int,error:string|null}
+     */
+    public static function runCartOrphanCleanup($backup = true, $trigger = 'manual')
+    {
+        $found = self::findCartOrphans();
+        $ids = array_map('intval', array_column($found['customizations'], 'id_customization'));
+
+        $handle = null;
+        $backupFile = false;
+        if ($backup) {
+            [$backupFile, $handle] = self::openBackup('cart-orphans');
+        }
+
+        $db = Db::getInstance();
+        $logsA = [];
+        $logsB = [];
+        $error = null;
+
+        try {
+            $ok = (bool) $db->execute('START TRANSACTION');
+            if ($ok && $ids) {
+                $idList = implode(',', $ids);
+                $ok = self::applyOrCount('apply', $logsA, $handle, 'customized_data', '`id_customization` IN ('.$idList.')', 'customized value(s) of an orphaned customization')
+                    && self::applyOrCount('apply', $logsA, $handle, 'customization', '`id_customization` IN ('.$idList.')', 'orphaned customization(s) whose product has no customization field left')
+                    && self::applyOrCount('apply', $logsA, $handle, 'cart_product', '`id_customization` IN ('.$idList.')', 'cart line(s) holding an orphaned customization');
+            }
+            $ok = $ok && self::applyOrCount('apply', $logsB, $handle, 'cart_product', self::phantomCartLineWhere(), 'phantom cart line(s) stored against cart id 0');
+            if (!$ok) {
+                $error = (string) $db->getMsgError();
+            }
+        } catch (Throwable $e) {
+            $ok = false;
+            $error = $e->getMessage();
+        }
+
+        $db->execute($ok ? 'COMMIT' : 'ROLLBACK');
+
+        if ($handle) {
+            gzclose($handle);
+        }
+
+        $result = [
+            'logs' => $ok ? array_merge($logsA, $logsB) : [],
+            'backup_file' => $backupFile,
+            'skipped' => $found['skipped'],
+            'removed_customizations' => $ok ? self::countLogged($logsA, 'customization') : 0,
+            'removed_phantom' => $ok ? self::countLogged($logsB, 'cart_product') : 0,
+            'error' => $ok ? null : ($error !== '' ? $error : 'unknown database error'),
+        ];
+
+        self::logCartOrphanRun($trigger, $result, $logsA);
+
+        return $result;
+    }
+
+    protected static function countLogged(array $logs, $table)
+    {
+        $count = 0;
+        foreach ($logs as $log) {
+            if ($log['table'] === $table) {
+                $count += (int) $log['count'];
+            }
+        }
+
+        return $count;
+    }
+
+    /**
+     * One Advanced Parameters > Logs entry per run that changed or skipped
+     * something. A run that only repeats the same skipped carts is written
+     * once (allowDuplicate false), so a daily schedule cannot flood the log;
+     * every run that deletes rows is written every time.
+     */
+    protected static function logCartOrphanRun($trigger, array $result, array $logsA)
+    {
+        if ($result['error'] === null && !$result['logs'] && !$result['skipped']) {
+            return;
+        }
+
+        $parts = [];
+        if ($result['error'] !== null) {
+            $parts[] = 'failed and rolled back, nothing deleted: '.$result['error'];
+        } else {
+            $byTable = [];
+            foreach ($logsA as $log) {
+                $byTable[] = $log['table'].' '.(int) $log['count'];
+            }
+            $parts[] = $result['removed_customizations'].' orphaned customization(s) removed'.($byTable ? ' ('.implode(', ', $byTable).' rows)' : '');
+            $parts[] = $result['removed_phantom'].' phantom cart line(s) with id_cart 0 removed';
+        }
+
+        if ($result['skipped']) {
+            $carts = [];
+            foreach ($result['skipped'] as $row) {
+                $carts[(int) $row['id_cart']] = 'cart #'.(int) $row['id_cart'].' (order #'.implode(', #', $row['id_orders']).')';
+            }
+            $shown = array_slice($carts, 0, 20);
+            $parts[] = 'skipped, linked order, review manually: '.implode('; ', $shown)
+                .(count($carts) > count($shown) ? '; and '.(count($carts) - count($shown)).' more cart(s)' : '');
+        }
+
+        if ($result['backup_file']) {
+            $parts[] = 'backup '.$result['backup_file'];
+        }
+
+        PrestaShopLogger::addLog(
+            'PrestaCleaner orphaned cart data, '.$trigger.' run: '.implode('. ', $parts).'.',
+            $result['error'] !== null ? 3 : 1,
+            null,
+            'PrestaCleaner',
+            null,
+            $result['error'] !== null || (bool) $result['logs']
+        );
+    }
+
     /**
      * Runs a DELETE (optionally backing up the matching rows first) in
      * 'apply' mode, or a COUNT(*) of the same condition in 'preview' mode -
      * the two modes can never disagree because they share this one method.
+     * Returns false only when the DELETE itself failed, for callers that
+     * run several steps inside one transaction.
      */
     protected static function applyOrCount($mode, array &$logs, $handle, $table, $whereSql, $description)
     {
@@ -744,19 +987,23 @@ class PrestaCleaner extends Module
                 $logs[] = ['table' => $table, 'description' => $description, 'count' => $count];
             }
 
-            return;
+            return true;
         }
 
         if ($handle) {
             self::writeTableRowsToBackup($handle, $table, $whereSql);
         }
 
-        if (Db::getInstance()->execute('DELETE FROM `'.bqSQL(self::t($table)).'` WHERE '.$whereSql)) {
-            $affected = Db::getInstance()->Affected_rows();
-            if ($affected) {
-                $logs[] = ['table' => $table, 'description' => $description, 'count' => $affected];
-            }
+        if (!Db::getInstance()->execute('DELETE FROM `'.bqSQL(self::t($table)).'` WHERE '.$whereSql)) {
+            return false;
         }
+
+        $affected = Db::getInstance()->Affected_rows();
+        if ($affected) {
+            $logs[] = ['table' => $table, 'description' => $description, 'count' => $affected];
+        }
+
+        return true;
     }
 
     /**
@@ -1448,6 +1695,10 @@ class PrestaCleaner extends Module
             $banner = $this->processApplyTruncate('catalog');
         } elseif (Tools::isSubmit('submitApplyTruncateSales')) {
             $banner = $this->processApplyTruncate('sales');
+        } elseif (Tools::isSubmit('submitPreviewCartOrphans')) {
+            $banner = $this->renderPreviewCartOrphans();
+        } elseif (Tools::isSubmit('submitApplyCartOrphans')) {
+            $banner = $this->processApplyCartOrphans();
         } elseif (Tools::isSubmit('submitPreviewDeleteOrders')) {
             $banner = $this->renderPreviewDeleteOrders();
         } elseif (Tools::isSubmit('submitApplyDeleteOrders')) {
@@ -1466,6 +1717,7 @@ class PrestaCleaner extends Module
                 $this->trans('Removes abandoned carts older than a month with no order, expired or exhausted cart rules, and re-numbers admin menu positions. Safe to run any time.', [], 'Modules.Prestacleaner.Admin'),
                 'submitPreviewOptimize', 'submitApplyOptimize', 'backup_optimize', self::CONF_BACKUP_BEFORE_OPTIMIZE
             )
+            .$this->renderCartOrphansPanel()
             .$this->renderTruncatePanel(
                 'truncate_catalog', $this->trans('Reset the catalog', [], 'Modules.Prestacleaner.Admin'),
                 $this->trans('Permanently deletes every product, category (except the root/home category), attribute, feature, manufacturer, supplier, and their images. There is no undo beyond the backup created below.', [], 'Modules.Prestacleaner.Admin'),
@@ -1510,6 +1762,8 @@ class PrestaCleaner extends Module
         Configuration::updateGlobalValue(self::CONF_BACKUP_BEFORE_OPTIMIZE, (int) Tools::getValue('default_backup_optimize', 0) ? 1 : 0);
         Configuration::updateGlobalValue(self::CONF_BACKUP_BEFORE_TRUNCATE, (int) Tools::getValue('default_backup_truncate', 0) ? 1 : 0);
         Configuration::updateGlobalValue(self::CONF_BACKUP_BEFORE_DELETE_ORDERS, (int) Tools::getValue('default_backup_delete_orders', 0) ? 1 : 0);
+        Configuration::updateGlobalValue(self::CONF_BACKUP_BEFORE_CART_ORPHANS, (int) Tools::getValue('default_backup_cart_orphans', 0) ? 1 : 0);
+        Configuration::updateGlobalValue(self::CONF_AUTO_CART_ORPHANS, (int) Tools::getValue('auto_cart_orphans', 0) ? 1 : 0);
 
         $purged = self::purgeOldBackups((int) $retentionRaw);
 
@@ -1578,6 +1832,51 @@ class PrestaCleaner extends Module
         $result = self::runCleanAndOptimize($backup);
 
         return $this->renderApplyResult($result['logs'], $result['backup_file']);
+    }
+
+    protected function renderPreviewCartOrphans()
+    {
+        $found = self::findCartOrphans();
+        $this->previewResults['cart_orphans'] = $found;
+        $total = count($found['customizations']) + $found['phantom_count'];
+
+        $message = sprintf(
+            $this->trans('Preview complete: %d orphaned customization(s) and %d phantom cart line(s) with cart id 0 found. Nothing has been changed yet.', [], 'Modules.Prestacleaner.Admin'),
+            count($found['customizations']), $found['phantom_count']
+        );
+        if ($found['skipped']) {
+            $message .= ' '.sprintf($this->trans('%d customization(s) in a cart that already has an order will be left alone - see below.', [], 'Modules.Prestacleaner.Admin'), count($found['skipped']));
+        }
+
+        return $this->alert($total ? 'info' : 'success', $message);
+    }
+
+    protected function processApplyCartOrphans()
+    {
+        $backup = (bool) Tools::getValue('backup_cart_orphans', 0);
+        $result = self::runCartOrphanCleanup($backup, 'manual');
+
+        // Only the skipped list is worth showing after a run: everything else is gone.
+        $this->previewResults['cart_orphans'] = ['customizations' => [], 'skipped' => $result['skipped'], 'phantom' => [], 'phantom_count' => 0, 'applied' => true];
+
+        if ($result['error'] !== null) {
+            return $this->alert('danger', $this->trans('The cleanup hit a database error and was rolled back - nothing was deleted. The error is in Advanced Parameters > Logs.', [], 'Modules.Prestacleaner.Admin'));
+        }
+
+        $message = sprintf(
+            $this->trans('Done - %d orphaned customization(s) and %d phantom cart line(s) with cart id 0 removed.', [], 'Modules.Prestacleaner.Admin'),
+            $result['removed_customizations'], $result['removed_phantom']
+        );
+        if ($result['backup_file']) {
+            $message .= ' '.sprintf($this->trans('A backup was saved as %s (Advanced Parameters > DB Backup).', [], 'Modules.Prestacleaner.Admin'), '<code>'.Tools::safeOutput($result['backup_file']).'</code>');
+        } elseif ($backup) {
+            $message .= ' '.$this->trans('The backup could not be created - please check disk space and permissions.', [], 'Modules.Prestacleaner.Admin');
+        }
+        if ($result['skipped']) {
+            $message .= ' '.sprintf($this->trans('%d customization(s) in carts that have an order were skipped - see below.', [], 'Modules.Prestacleaner.Admin'), count($result['skipped']));
+        }
+
+        return $this->alert($result['skipped'] ? 'warning' : 'success', $message);
     }
 
     protected function renderApplyResult(array $logs, $backupFile)
@@ -1702,6 +2001,7 @@ class PrestaCleaner extends Module
     {
         $action = $this->getConfigureUrl();
         $autoEnabled = Configuration::get(self::CONF_AUTO_ENABLED) ? ' checked="checked"' : '';
+        $autoCartOrphans = Configuration::get(self::CONF_AUTO_CART_ORPHANS) ? ' checked="checked"' : '';
         $interval = (int) Configuration::get(self::CONF_AUTO_INTERVAL_DAYS);
         $retention = (int) Configuration::get(self::CONF_BACKUP_RETENTION_DAYS);
         $lastRun = (int) Configuration::get(self::CONF_AUTO_LAST_RUN);
@@ -1713,12 +2013,14 @@ class PrestaCleaner extends Module
             'default_backup_optimize' => self::CONF_BACKUP_BEFORE_OPTIMIZE,
             'default_backup_truncate' => self::CONF_BACKUP_BEFORE_TRUNCATE,
             'default_backup_delete_orders' => self::CONF_BACKUP_BEFORE_DELETE_ORDERS,
+            'default_backup_cart_orphans' => self::CONF_BACKUP_BEFORE_CART_ORPHANS,
         ];
         $backupLabels = [
             'default_backup_fix' => $this->trans('Back up by default before "Check & fix"', [], 'Modules.Prestacleaner.Admin'),
             'default_backup_optimize' => $this->trans('Back up by default before "Clean & optimize"', [], 'Modules.Prestacleaner.Admin'),
             'default_backup_truncate' => $this->trans('Back up by default before resetting the catalog or orders', [], 'Modules.Prestacleaner.Admin'),
             'default_backup_delete_orders' => $this->trans('Back up by default before deleting selected orders', [], 'Modules.Prestacleaner.Admin'),
+            'default_backup_cart_orphans' => $this->trans('Back up by default before removing orphaned cart data', [], 'Modules.Prestacleaner.Admin'),
         ];
         $backupHtml = '';
         foreach ($backupChecks as $field => $confKey) {
@@ -1731,6 +2033,7 @@ class PrestaCleaner extends Module
             <div class="panel-body">
                 <form method="post" action="'.$action.'">
                     <div class="checkbox"><label><input type="checkbox" name="auto_enabled" value="1"'.$autoEnabled.'> '.$this->trans('Automatically run "Check & fix" and "Clean & optimize"', [], 'Modules.Prestacleaner.Admin').'</label></div>
+                    <div class="checkbox" style="margin-left:20px"><label><input type="checkbox" name="auto_cart_orphans" value="1"'.$autoCartOrphans.'> '.$this->trans('Also remove "Orphaned cart data" on each scheduled run', [], 'Modules.Prestacleaner.Admin').'</label></div>
                     <div class="form-group">
                         <label>'.$this->trans('Every', [], 'Modules.Prestacleaner.Admin').'</label>
                         <input type="number" min="1" max="365" class="form-control" style="width:120px;display:inline-block" name="auto_interval_days" value="'.$interval.'"> '.$this->trans('day(s). Last run:', [], 'Modules.Prestacleaner.Admin').' '.$lastRunText.'
@@ -1832,6 +2135,95 @@ class PrestaCleaner extends Module
                 '.$this->renderPreviewTable($key).'
             </div>
         </div>';
+    }
+
+    protected function renderCartOrphansPanel()
+    {
+        $action = $this->getConfigureUrl();
+        $checked = Configuration::get(self::CONF_BACKUP_BEFORE_CART_ORPHANS) ? ' checked="checked"' : '';
+
+        return '<div class="panel">
+            <div class="panel-heading"><i class="icon-shopping-cart"></i> '.$this->trans('Orphaned cart data', [], 'Modules.Prestacleaner.Admin').'</div>
+            <div class="panel-body">
+                <p>'.$this->trans('Finds cart rows that still add to cart quantities although no valid cart line stands behind them: customizations still sitting in a cart after customization was switched off on their product, and cart lines saved under cart id 0, which no real cart can have. A cart that already became an order is never touched - it is listed below for you to review instead.', [], 'Modules.Prestacleaner.Admin').'</p>
+                <form method="post" action="'.$action.'">
+                    <div class="checkbox"><label><input type="checkbox" name="backup_cart_orphans" value="1"'.$checked.'> '.$this->trans('Back up the affected rows first', [], 'Modules.Prestacleaner.Admin').'</label></div>
+                    <button type="submit" name="submitPreviewCartOrphans" value="1" class="btn btn-default">'.$this->trans('Preview (no changes)', [], 'Modules.Prestacleaner.Admin').'</button>
+                    <button type="submit" name="submitApplyCartOrphans" value="1" class="btn btn-primary" onclick="return confirm(\''.addslashes($this->trans('Remove the orphaned cart data found by the preview?', [], 'Modules.Prestacleaner.Admin')).'\');">'.$this->trans('Apply', [], 'Modules.Prestacleaner.Admin').'</button>
+                </form>
+                '.$this->renderCartOrphansPreview().'
+            </div>
+        </div>';
+    }
+
+    protected function renderCartOrphansPreview()
+    {
+        if (!isset($this->previewResults['cart_orphans'])) {
+            return '';
+        }
+
+        $found = $this->previewResults['cart_orphans'];
+        $limit = self::CART_ORPHANS_PREVIEW_LIMIT;
+        $html = '';
+
+        if (empty($found['applied'])) {
+            $rows = [];
+            foreach (array_slice($found['customizations'], 0, $limit) as $row) {
+                $rows[] = [(int) $row['id_cart'], (int) $row['id_product'], (int) $row['id_customization'], (string) $row['date_add']];
+            }
+            $html .= $this->renderCartOrphansTable(
+                sprintf($this->trans('Customizations whose product has no customization field left: %d', [], 'Modules.Prestacleaner.Admin'), count($found['customizations'])),
+                [$this->trans('Cart', [], 'Modules.Prestacleaner.Admin'), $this->trans('Product', [], 'Modules.Prestacleaner.Admin'), $this->trans('Customization', [], 'Modules.Prestacleaner.Admin'), $this->trans('Added', [], 'Modules.Prestacleaner.Admin')],
+                $rows, count($found['customizations'])
+            );
+
+            $rows = [];
+            foreach ($found['phantom'] as $row) {
+                $rows[] = [(int) $row['id_cart'], (int) $row['id_product'], (int) $row['id_customization'], (string) $row['date_add']];
+            }
+            $html .= $this->renderCartOrphansTable(
+                sprintf($this->trans('Cart lines saved under cart id 0: %d', [], 'Modules.Prestacleaner.Admin'), $found['phantom_count']),
+                [$this->trans('Cart', [], 'Modules.Prestacleaner.Admin'), $this->trans('Product', [], 'Modules.Prestacleaner.Admin'), $this->trans('Customization', [], 'Modules.Prestacleaner.Admin'), $this->trans('Added', [], 'Modules.Prestacleaner.Admin')],
+                $rows, $found['phantom_count']
+            );
+        }
+
+        if ($found['skipped']) {
+            $items = '';
+            foreach (array_slice($found['skipped'], 0, $limit) as $row) {
+                $items .= '<li>'.sprintf(
+                    $this->trans('Skipped: cart #%d has a linked order (%s), review manually - product %d, customization %d.', [], 'Modules.Prestacleaner.Admin'),
+                    (int) $row['id_cart'], '#'.implode(', #', array_map('intval', $row['id_orders'])), (int) $row['id_product'], (int) $row['id_customization']
+                ).'</li>';
+            }
+            $html .= $this->alert('warning', '<ul style="margin:0">'.$items.'</ul>');
+        }
+
+        return $html;
+    }
+
+    protected function renderCartOrphansTable($heading, array $headers, array $rows, $total)
+    {
+        $html = '<h4 style="margin-top:15px">'.Tools::safeOutput($heading).'</h4>';
+        if (!$rows) {
+            return $html.'<p>'.$this->trans('None found.', [], 'Modules.Prestacleaner.Admin').'</p>';
+        }
+
+        $html .= '<table class="table prestacleaner-table"><thead><tr>';
+        foreach ($headers as $header) {
+            $html .= '<th>'.$header.'</th>';
+        }
+        $html .= '</tr></thead><tbody>';
+        foreach ($rows as $cells) {
+            $html .= '<tr><td>#'.(int) $cells[0].'</td><td>'.(int) $cells[1].'</td><td>'.(int) $cells[2].'</td><td>'.Tools::safeOutput($cells[3]).'</td></tr>';
+        }
+        $html .= '</tbody></table>';
+
+        if ($total > count($rows)) {
+            $html .= '<p>'.sprintf($this->trans('Showing the first %d of %d.', [], 'Modules.Prestacleaner.Admin'), count($rows), $total).'</p>';
+        }
+
+        return $html;
     }
 
     protected function renderTruncatePanel($key, $title, $description, $previewSubmit, $applySubmit, $confirmField, $requiredPhrase)

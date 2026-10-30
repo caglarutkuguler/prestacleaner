@@ -1,6 +1,6 @@
 # Database Cleaner
 
-**Version:** 3.5.1
+**Version:** 3.6.0
 
 Safely clean up a PrestaShop database: fix orphan rows left behind by deleted products, orders, languages or modules; clear out abandoned carts and dead cart rules; or reset the whole catalog / order history to start fresh. Every action can back itself up first, has a dry-run preview, and destructive actions require typing a confirmation phrase - not just ticking a box.
 
@@ -13,11 +13,12 @@ Safely clean up a PrestaShop database: fix orphan rows left behind by deleted pr
 - **Store health score** - a live, computed score (not a static claim) on the configure page, with the specific reasons behind it. The same score also appears as a circular badge in the left column of the PrestaShop Dashboard (not on every back-office page), clearly labelled as coming from this module, with a link back to the configure page.
 - **Check & fix** - removes rows that point at something already deleted (a product, an order, a language, a shop...) across ~100 known table relationships, duplicate configuration entries, and orphan translations. Always safe to run.
 - **Clean & optimize** - removes abandoned carts (older than a month, never ordered), expired or exhausted cart rules, and re-numbers admin menu positions left with gaps or duplicates. Always safe to run.
+- **Orphaned cart data** - removes customizations still marked as in a cart after their product lost every customization field (customization switched off later), together with their customized values and cart line, and cart lines saved under cart id 0, which no real cart can have. A cart that already became an order is never touched: it is listed as "Skipped: cart #X has a linked order, review manually" instead. The preview lists the rows themselves (cart, product, customization, date added), all deletions run in one database transaction, and every run that removes or skips something is written to Advanced Parameters > Logs.
 - **Reset the catalog / Reset orders & customers** - permanently wipes the corresponding tables and images. This is the only irreversible action, and it is never scheduled or reachable by cron.
 - **Delete selected orders** - search by order ID/reference, status, or date range, tick the ones you want, and delete only those - a scoped alternative to a full orders reset for clearing out stray test transactions. Cleans up every related row (order lines, invoices, payments, history, carriers, returns, credit slips, order messages) in the correct order; everything else (customers, carts, other orders) is left untouched.
 - **Preview (dry run)** - every action can be previewed first: it reports exactly what would change, using the same logic as the real run, without writing anything.
 - **Automatic backup** - before any action, the module can back up exactly the rows about to be touched (a full snapshot for the two reset actions) to the same folder PrestaShop's own Advanced Parameters > DB Backup page reads from - restore from there, no separate restore tool to trust.
-- **Scheduled maintenance** - "Check & fix" and "Clean & optimize" can run automatically: on an interval you set, either from a real server cron hitting a token-protected URL, or as a best-effort fallback the next time an admin opens the back office (run after the page has already been sent, so it's never felt as a slowdown).
+- **Scheduled maintenance** - "Check & fix" and "Clean & optimize" (and, if you tick it, "Orphaned cart data") can run automatically: on an interval you set, either from a real server cron hitting a token-protected URL, or as a best-effort fallback the next time an admin opens the back office (run after the page has already been sent, so it's never felt as a slowdown).
 
 ## Installation
 
@@ -34,8 +35,9 @@ The configure page is organized top to bottom:
 3. **Scheduled maintenance & backups** - turn on automatic runs, set the interval, set how long backup files are kept, and copy the cron URL for a real server cron job.
 4. **Backup files** - every backup this module has created, with size, date, and a delete button. Download or restore them from Advanced Parameters > DB Backup.
 5. **Check & fix**, **Clean & optimize** - description, a "back up first" checkbox, Preview and Apply buttons.
-6. **Reset the catalog**, **Reset orders & customers** - the same, plus a text field where you must type the exact confirmation phrase shown before Apply does anything.
-7. **Delete selected orders** - search/filter orders, tick the ones to remove, optionally back them up, tick "I understand...", then Preview or Delete selected.
+6. **Orphaned cart data** - the same, with a row-by-row preview and a list of skipped carts that have an order.
+7. **Reset the catalog**, **Reset orders & customers** - the same, plus a text field where you must type the exact confirmation phrase shown before Apply does anything.
+8. **Delete selected orders** - search/filter orders, tick the ones to remove, optionally back them up, tick "I understand...", then Preview or Delete selected.
 
 This module has no storefront component - there is nothing for a shop visitor to see; every setting here only affects the back office and the database.
 
@@ -47,7 +49,7 @@ Backup files are plain gzipped SQL, named `prestacleaner_<action>-<timestamp>.sq
 
 ## Scheduled cleaning
 
-Two ways to automate "Check & fix" and "Clean & optimize" (never the catalog/orders reset):
+Two ways to automate "Check & fix" and "Clean & optimize" (never the catalog/orders reset). "Orphaned cart data" joins them only when "Also remove "Orphaned cart data" on each scheduled run" is ticked - it is off by default, because it removes lines from carts a shopper may still have open.
 
 - **Real cron (recommended):** copy the URL shown in the Scheduled maintenance panel into your hosting's cron job scheduler, once a day is enough. The URL is protected by a long random token; regenerate it any time from the same panel if it ever leaks.
 - **No server access needed:** turn on "Automatically run..." and set an interval. The check runs once per admin page load (a single, cheap Configuration read) and only actually performs the cleanup when the interval has elapsed, after the admin's page has already been delivered to the browser.
