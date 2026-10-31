@@ -1,0 +1,20 @@
+name: Release notes
+on:
+  push: { branches: [main], paths: ["CHANGELOG.md"], tags: ["v*"] }
+  workflow_dispatch:
+permissions: { contents: write }
+jobs:
+  notes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Build RELEASE_NOTES.md
+        run: python3 -I .github/scripts/changelog_to_release_notes.py CHANGELOG.md RELEASE_NOTES.md --versions 3 --title "${{ vars.RELEASE_TITLE || github.event.repository.description || github.event.repository.name }}"
+      - name: Commit if changed
+        run: |
+          git diff --quiet -- RELEASE_NOTES.md && { echo "no change"; exit 0; }
+          git config user.name "release-notes-bot"; git config user.email "release-notes-bot@users.noreply.github.com"
+          git add RELEASE_NOTES.md && git commit -m "docs: regenerate RELEASE_NOTES.md [skip ci]" && git push
