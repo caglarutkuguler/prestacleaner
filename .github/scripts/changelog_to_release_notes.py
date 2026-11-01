@@ -67,7 +67,7 @@ NOISE_PATTERNS = [
     r"\bworking files\b", r"\bgitignore\b", r"\bp\d+\.html\b",
     r"\bchangelog\b",            # "update changelog" lines
     r"\broot cause\b",           # post-mortem notes
-    r"\blint\b", r"\bphpstan\b", r"\bphp-cs\b",
+    r"\blint\b", r"\bphpstan\b", r"\bphp-cs\b", r"\bphpcs\b", r"\bdocblocks?\b",
     # own cross-promotion and developer-only lines (A-icerik/03)
     r"\bpromo\b", r"cross-promo", r"\bads widget\b", r"\breview nudge\b",
     r"\bexception\b", r"console\.log", r"\bdd\(",
@@ -78,7 +78,7 @@ NOISE_RE = re.compile("|".join(f"(?:{p})" for p in NOISE_PATTERNS), re.IGNORECAS
 # If a line contains one of these, it is dropped (conservative).
 INTERNAL_JARGON_RE = re.compile(
     r"(500'd|\b500s\b|\bfatals?\b|\bstack ?trace\b|\bvar_dump\b|\bshim\b|\bredeclaration\b|"
-    r"\$\w+|::|->|\bWHERE clauses?\b|PS ?1\.[67]-only|\b1\.[67]-only|\bhook(Display|Action)\w+|"
+    r"\$[\w.(]|::|->|\bsprintf\b|\bfmod\b|\bDI preference\b|\bdata-form-part\b|\bWHERE clauses?\b|PS ?1\.[67]-only|\b1\.[67]-only|\bhook(Display|Action)\w+|"
     r"\.tpl\b|\.php\b|\.js\b|\.scss\b|\bclass\b|\bmethod\b|\bnullable\b|\barray\b|"
     r"\bupgrade script\b|\boverrides?\b|\bcontroller\b|\bwidget class\b)",
     re.IGNORECASE,
@@ -86,7 +86,7 @@ INTERNAL_JARGON_RE = re.compile(
 
 # --------------------------------------------------------------------------- classification
 
-NEW_RE = re.compile(r"^(feat|feature|add|added|new|introduce|introduced|implement|implemented|support)\b", re.I)
+NEW_RE = re.compile(r"^(feat|feature|add|added|new|introduce|introduced|implement|implemented|support|first release|initial release)\b", re.I)
 FIXED_RE = re.compile(r"^(fix|fixed|fixes|bugfix|hotfix|resolve|resolved|correct|corrected|repair|guard|prevent)\b", re.I)
 IMPROVED_RE = re.compile(r"^(improve|improved|perf|enhance|enhanced|update|updated|refresh|rename|renamed|polish|redesign|show|keep|bill|hide|remove|removed|replace|replaced|optimi[sz]e|speed)\b", re.I)
 
@@ -255,14 +255,24 @@ def render(versions: list[Version], title: str | None) -> str:
 
 # --------------------------------------------------------------------------- Keep-a-Changelog input
 
-# Keep-a-Changelog section heading -> conventional-commit type that classify() already maps
+# Keep-a-Changelog sections that reach the customer -> conventional-commit type that classify()
+# already maps. Any other "###" section (Notes, Quality, Tests, Known issues ...) is developer
+# material: in a version block that has "###" sections, only entries under these are kept.
 KAC_SECTION_TYPES = {
-    "added": "feat", "new": "feat",
+    "added": "feat",
+    "changed": "improve", "deprecated": "improve", "removed": "improve",
     "fixed": "fix", "security": "fix",
-    "changed": "improve", "improved": "improve", "removed": "improve", "deprecated": "improve",
 }
-KAC_SECTION_RE = re.compile(r"^\s*#{3,6}\s*(\w+)\s*$")
+# "### Fixed", "### Added (1.0.1)", "### Fixed — security"; not "### Fixed during testing"
+KAC_SECTION_RE = re.compile(r"^\s*###\s*(\w+)\s*(?:[(\[—–\-/:,].*)?$")
+SUBHEADING_RE = re.compile(r"^\s*###(?!#)")
+BLOCK_HEADING_RE = re.compile(r"^\s*#{1,2}(?!#)")
 BULLET_START_RE = re.compile(r"^\s*[-*•]\s+")
+
+
+def is_block_start(line: str) -> bool:
+    """A version header or a top-level (# / ##) heading starts a new version block."""
+    return bool(HEADER_RE.match(line) or BLOCK_HEADING_RE.match(line))
 
 
 def strip_emphasis(line: str) -> str:
@@ -271,19 +281,41 @@ def strip_emphasis(line: str) -> str:
     return re.sub(r"(?<![\w*])\*(?=\S)([^*\n]+?)(?<=\S)\*(?![\w*])", r"\1", line)
 
 
-def flatten_keep_a_changelog(text: str) -> str:
+def flatten_keep_a_changelog(text: str, skipped: list | None = None) -> str:
     """
     Pre-pass for hand-written Keep-a-Changelog files, so the line-based parser above sees one
     entry per line: a wrapped bullet is joined back onto its first line, a paragraph becomes
     one entry, tables and fenced code are dropped, and entries under "### Added / Fixed /
     Changed ..." get the matching "feat: / fix: / improve:" prefix so classify() files them
-    under the heading the author chose. Git-log style input passes through unchanged.
+    under the heading the author chose. In a version block that has "###" sections, entries
+    outside the KAC_SECTION_TYPES sections are left out and appended to `skipped` as
+    (version, entry). Git-log style input passes through unchanged.
     """
+    lines = text.splitlines()
+    # version blocks that use "###" sections at all; only those are filtered by section
+    sectioned: set[int] = set()
+    block = 0
+    in_fence = False
+    for raw in lines:
+        # same fence handling as below, so both passes number the blocks alike
+        if raw.lstrip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence or not raw.strip():
+            continue
+        if is_block_start(raw.rstrip()):
+            block += 1
+        elif SUBHEADING_RE.match(raw):
+            sectioned.add(block)
+
     out: list[str] = []
     section_type: str | None = None
-    open_entry = False      # last line in `out` is an entry that may continue
+    open_entry = False      # last line in `out` (or `skipped`) is an entry that may continue
     in_fence = False
-    for raw in text.splitlines():
+    skipping = False        # inside a section whose entries are left out
+    block = 0
+    version = "unreleased"
+    for raw in lines:
         line = raw.rstrip()
         if line.lstrip().startswith("```"):
             in_fence = not in_fence
@@ -296,33 +328,42 @@ def flatten_keep_a_changelog(text: str) -> str:
             open_entry = False
             out.append("")
             continue
+        if is_block_start(line):
+            block += 1
+            h = HEADER_RE.match(line)
+            version = h.group(1) if h else "unreleased"
+            section_type = None
+            # text before the block's first "###" is in no kept section
+            skipping = block in sectioned
+            open_entry = False
+            out.append(line)
+            continue
         if line.lstrip().startswith("#"):
             # any heading closes the previous section; only a known one opens a new type
             m = KAC_SECTION_RE.match(line)
             section_type = KAC_SECTION_TYPES.get(m.group(1).lower()) if m else None
+            skipping = block in sectioned and section_type is None
             open_entry = False
             out.append(line)
             continue
-        if HEADER_RE.match(line):
-            section_type = None
-            open_entry = False
-            out.append(line)
-            continue
-        if BULLET_START_RE.match(line):
-            body = BULLET_START_RE.sub("", line, count=1).strip()
-            if section_type and not CC_PREFIX_RE.match(body):
-                body = f"{section_type}: {body}"
-            out.append(f"- {body}")
+        is_bullet = bool(BULLET_START_RE.match(line))
+        body = BULLET_START_RE.sub("", line, count=1).strip()
+        if skipping:
+            if skipped is not None:
+                if open_entry and not is_bullet:
+                    skipped[-1] = (version, f"{skipped[-1][1]} {body}")
+                else:
+                    skipped.append((version, body))
             open_entry = True
             continue
-        body = line.strip()
-        if open_entry:
+        if open_entry and not is_bullet:
             out[-1] = f"{out[-1]} {body}"
-        else:
-            if section_type and not CC_PREFIX_RE.match(body):
-                body = f"{section_type}: {body}"
-            out.append(f"- {body}")
-            open_entry = True
+            continue
+        if section_type:
+            # the bucket comes from the heading, whatever the entry itself starts with
+            body = f"{section_type}: {body}"
+        out.append(f"- {body}")
+        open_entry = True
     # after joining, so emphasis that spans a wrapped line is removed too
     return "\n".join(strip_emphasis(line) for line in out)
 
@@ -350,7 +391,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: cannot read {args.changelog}: {exc}", file=sys.stderr)
         return 1
 
-    versions = parse_changelog(flatten_keep_a_changelog(text), inline_versions=args.inline)
+    skipped: list[tuple[str, str]] = []
+    versions = parse_changelog(flatten_keep_a_changelog(text, skipped), inline_versions=args.inline)
+    for num, entry in skipped:
+        if num in versions:
+            versions[num].dropped.append(strip_emphasis(entry))
     versions.pop("unreleased", None)
     if not versions:
         print("error: no version numbers detected (expected x.y.z)", file=sys.stderr)
