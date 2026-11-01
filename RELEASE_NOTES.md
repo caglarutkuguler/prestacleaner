@@ -6,13 +6,13 @@ _Only customer-relevant changes are listed. Internal refactoring, tests and hous
 
 ### New
 - Orphaned cart data — a new panel between "Clean & optimize" and the reset actions. It finds two kinds of cart rows that cart quantities still add up although no valid cart line stands behind them:
-- Customizations still marked as in a cart (`in_cart = 1`) whose product has no customization field left — on cores that soft-delete fields (`customization_field.is_deleted`), a product whose fields are all flagged counts as having none;
+- Customizations still marked as in a cart whose product has no customization field left — on cores that only flag deleted fields, a product whose fields are all flagged counts as having none;
 - Cart lines saved under cart id 0, which no real cart can have
-- Every cart behind a found customization is checked against `orders`. A cart with an order is never touched; it is listed as "Skipped: cart #X has a linked order, review manually" in the preview, after Apply, and in the log
-- The preview lists the rows themselves (cart, product, customization, date added; first 200 per kind, with full totals). Apply deletes `customized_data`, then `customization`, then the `cart_product` lines holding those exact customizations, then the cart-id-0 lines — all in one transaction, rolled back on any database error. Lines of the same product without that customization stay in the cart
-- Backs up the affected rows first (on by default, its own setting under Scheduled maintenance & backups), into the same `prestacleaner_*.sql.gz` files as every other action
-- Each run that removes or skips something is written to Advanced Parameters > Logs with the counts per kind and the backup file name; a run that only repeats the same skipped carts is not logged again
-- Can join the scheduled run (cron URL and back-office fallback) through a new "Also remove "Orphaned cart data" on each scheduled run" checkbox — off by default. The cron response and the stored last-run summary gain `cart_orphans_rows`
+- Every cart behind a found customization is checked against the shop's orders. A cart with an order is never touched; it is listed as "Skipped: cart #X has a linked order, review manually" in the preview, after Apply, and in the log
+- The preview lists the rows themselves (cart, product, customization, date added; first 200 per kind, with full totals). Apply deletes the customization values, then the customizations, then the cart lines holding those exact customizations, then the cart-id-0 lines — all in one transaction, rolled back on any database error. Lines of the same product without that customization stay in the cart
+- Backs up the affected rows first (on by default, its own setting under Scheduled maintenance & backups), into the same compressed SQL backup files as every other action
+- Each run that removes or skips something is written to Advanced Parameters › Logs with the counts per kind and the backup file name; a run that only repeats the same skipped carts is not logged again
+- Can join the scheduled run (cron URL and back-office fallback) through a new "Also remove "Orphaned cart data" on each scheduled run" checkbox — off by default. The cron response and the stored last-run summary gain an orphaned-cart-rows count
 
 ## 3.5.0
 
