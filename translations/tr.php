@@ -11,3 +11,5 @@ $_MODULE['<{prestacleaner}prestashop>megventurereviewnudge_c980491d2b999421c4aa1
 $_MODULE['<{prestacleaner}prestashop>megventurereviewnudge_6ecbf3c5ab7a06f08c526f02bce2b2d6'] = 'Değerlendirme yazın';
 $_MODULE['<{prestacleaner}prestashop>megventurereviewnudge_8ad4303b83a62fb6ca3b025bad5bc114'] = 'Hayır, teşekkürler';
 $_MODULE['<{prestacleaner}prestashop>megventurereviewnudge_4d170dcb0d03a0efa011c9193219bb68'] = 'Tamam, bir daha sormayacağız.';
+$_MODULE['<{prestacleaner}prestashop>prestacleaner_2831420e2c343c00fc80bb8b4634e559'] = 'Bu modülün güncellemelerini tek tıkla almak için ücretsiz MEG Venture Updates modülünü kurun.';
+$_MODULE['<{prestacleaner}prestashop>prestacleaner_9ffdb95250e26c7a6b468126ac7c75b0'] = 'Nasıl çalışır';

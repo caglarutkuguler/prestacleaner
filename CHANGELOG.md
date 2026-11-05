@@ -2,6 +2,12 @@
 
 All notable changes to **Database Cleaner** (`prestacleaner`).
 
+## 3.6.1
+
+### Added
+
+- The configuration page links to the free MEG Venture Updates module, which installs updates for this module in one click. The line is hidden once that module is installed.
+
 ## 3.6.0
 
 ### Added

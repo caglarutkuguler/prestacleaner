@@ -55,7 +55,7 @@ class PrestaCleaner extends Module
     {
         $this->name = 'prestacleaner';
         $this->tab = 'administration';
-        $this->version = '3.6.0';
+        $this->version = '3.6.1';
         $this->author = 'MEG Venture';
         $this->need_instance = 0;
         $this->multishop_context = Shop::CONTEXT_ALL;
@@ -1658,6 +1658,29 @@ class PrestaCleaner extends Module
      * ----------------------------------------------------------------
      */
 
+    /**
+     * One line pointing to the free MEG Venture Updates module, shown on the
+     * configuration page until that module is installed. A static link only:
+     * nothing is requested from megventure.com.
+     */
+    private function renderMvuNotice()
+    {
+        if (Module::isInstalled('megventureupdates')) {
+            return '';
+        }
+        $iso = Tools::strtolower((string) $this->context->language->iso_code);
+        if (!in_array($iso, array('en', 'tr', 'fr', 'es', 'de', 'it', 'nl', 'pl', 'pt'), true)) {
+            $iso = 'en';
+        }
+        $this->context->smarty->assign(array(
+            'mvu_notice_text' => $this->l('Get updates for this module in one click: install the free MEG Venture Updates module.'),
+            'mvu_notice_link' => $this->l('How it works'),
+            'mvu_notice_url' => 'https://megventure.com/' . $iso . '/content/17-module-updates',
+        ));
+
+        return $this->display(__FILE__, 'views/templates/admin/mvu_notice.tpl');
+    }
+
     public function getContent()
     {
         require_once _PS_MODULE_DIR_ . 'prestacleaner/classes/MegVentureAdsWidget.php';
@@ -1730,7 +1753,7 @@ class PrestaCleaner extends Module
             )
             .$this->renderDeleteOrdersPanel()
             .'</div>'
-            .MegVentureAdsWidgetV2::render('https://megventure.com/index.php?fc=module&module=virtualproductcombination&controller=adswidget');
+            .$this->renderMvuNotice() . MegVentureAdsWidgetV2::render('https://megventure.com/index.php?fc=module&module=virtualproductcombination&controller=adswidget');
     }
 
     protected function getConfigureUrl()
