@@ -2,6 +2,11 @@
 
 _Only customer-relevant changes are listed. Internal refactoring, tests and housekeeping are omitted._
 
+## 3.6.1
+
+### New
+- The configuration page links to the free MEG Venture Updates module, which installs updates for this module in one click. The line is hidden once that module is installed
+
 ## 3.6.0
 
 ### New
@@ -18,8 +23,3 @@ _Only customer-relevant changes are listed. Internal refactoring, tests and hous
 
 ### New
 - Clean & optimize now reaps onefee's orphaned cart-fee configuration rows. The onefee module stores two configuration rows per fee line in a cart, keyed by cart id, and only specific cart events remove them — so every cart deleted by this module's own abandoned-cart cleanup (or by anything else) left its rows behind forever, and PrestaShop loads the whole configuration table into memory on every page view. The new rule runs right after the abandoned-cart cleanup and deletes only rows whose cart no longer exists; rows belonging to a living cart are never touched, however old, because a cart can come back to life and its fee pricing reads from these rows. Preview counts it, apply backs the rows up first, exactly like every other rule
-
-## 3.4.0
-
-### New
-- A one-line review request on the module's own configure page (and nowhere else). It first appears 21 days after install — for existing installations, 21 days after this upgrade — and disappears forever once the merchant clicks the review link, clicks "No thanks", or has simply seen it three times. The link goes to the module's review form on megventure.com, in the back office language where the shop serves it. What it does not do: no tracking, no external request of any kind (the line is plain HTML; the review link routes through the configure page so the click is remembered, then the merchant's own browser is sent to the form), no JavaScript required, and nothing stored beyond three of the module's own prefixed configuration values (install timestamp, dismissed flag, display count), all removed on uninstall
